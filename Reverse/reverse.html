@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="theme-dark">
+<html lang="en">
 
 <head>
   <meta charset="UTF-8" />
@@ -19,54 +19,52 @@
     <header class="app-header">
       <div class="logo-container">
         <i class="fas fa-undo-alt logo-icon"></i>
-        <h1 data-i18n="app_title">REVERSE</h1>
+        <h1>REVERSE</h1>
       </div>
       <div class="header-controls">
-        <button id="themeToggle" class="icon-btn" data-i18n-title="toggle_theme" title="Toggle Theme">
+        <button id="themeToggle" class="icon-btn" title="Toggle Theme">
           <i class="fas fa-sun"></i>
         </button>
-        <button id="settingsBtn" class="icon-btn" data-i18n-title="settings" title="Settings">
+        <button id="settingsBtn" class="icon-btn" title="Settings">
           <i class="fas fa-cog"></i>
         </button>
       </div>
     </header>
 
     <main class="app-main">
-      <div class="recorder-panel" id="recorderPanel">
-        <div class="recorder-collapsible-content">
-          <div class="visualizer-container">
-            <canvas id="visualizer"></canvas>
-            <div class="empty-state" data-i18n="waiting_recording">Waiting for a recording to start...</div>
-          </div>
+      <div class="recorder-panel">
+        <div class="visualizer-container">
+          <canvas id="visualizer"></canvas>
+          <div class="empty-state">Waiting for a recording to start...</div>
+        </div>
 
-          <div class="recording-indicator" id="recIndicator">
-            <div class="pulsar"></div>
-            <span data-i18n="recording_status">Recording...</span>
-          </div>
+        <div class="recording-indicator" id="recIndicator">
+          <div class="pulsar"></div>
+          <span>Recording...</span>
         </div>
 
         <div class="controls-row">
           <button id="recordBtn" class="primary-btn">
             <i class="fas fa-circle"></i>
-            <span data-i18n="btn_start_recording">Start Recording</span>
+            <span>Start Recording</span>
           </button>
         </div>
       </div>
 
       <div class="recordings-container">
         <div class="section-header">
-          <h2 data-i18n="library_title">Recordings</h2>
+          <h2>Recordings</h2>
           <div class="sort-control">
-            <span data-i18n="sort_by">Sort by:</span>
+            <span>Sort by:</span>
             <select id="sortSelect">
-              <option value="newest" data-i18n="opt_newest">Newest</option>
-              <option value="oldest" data-i18n="opt_oldest">Oldest</option>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
             </select>
           </div>
         </div>
 
         <div id="recordingsGrid" class="recordings-grid">
-          <p class="empty-recordings-state" data-i18n="empty_recordings">
+          <p class="empty-recordings-state">
             No recordings yet. Start a new one above!
           </p>
         </div>
@@ -74,54 +72,88 @@
     </main>
 
     <footer class="app-footer">
-      <p id="statusMessage" class="status-message" data-i18n="status_ready">Ready</p>
+      <p id="statusMessage" class="status-message">Ready</p>
       <div class="storage-info" id="storageInfo">
         <i class="fas fa-database storage-icon"></i>
         <span id="storageStatus">0 MB of 74 MB</span>
-        <div id="storageTooltip" class="tooltip" data-i18n="storage_limit_label">Storage Limit: 74 MB</div>
+        <div id="storageTooltip" class="tooltip">Storage Limit: 74 MB</div>
       </div>
     </footer>
   </div>
 
+  <!-- Settings Modal -->
   <div id="settingsModal" class="modal">
-    <div class="modal-content glass-card">
+    <div class="modal-content">
       <div class="modal-header">
-        <h3 data-i18n="settings_title">Settings</h3>
-        <button class="close-btn" id="closeSettingsBtn" aria-label="Close Settings">
+        <h3>Settings</h3>
+        <button class="close-btn" aria-label="Close Settings">
           <i class="fas fa-times"></i>
         </button>
       </div>
       <div class="modal-body">
         <div class="settings-option">
-          <label for="langSelect"><i class="fas fa-language"></i> Language / Langue</label>
-          <div class="select-wrapper">
-            <select id="langSelect" class="settings-select">
-              <option value="en">English</option>
-              <option value="fr">Français</option>
-            </select>
-            <i class="fas fa-chevron-down select-arrow"></i>
-          </div>
+          <label for="exportOriginalAndReversed">Export Original and Reversed</label>
+          <input type="checkbox" id="exportOriginalAndReversed" />
         </div>
-
         <div class="settings-option">
-          <label for="tempSetting1"><i class="fas fa-sliders-h"></i> Temp Setting 1</label>
-          <label class="switch">
-            <input type="checkbox" id="tempSetting1">
-            <span class="slider round"></span>
-          </label>
+          <label for="exportWithInfoFile">Export with Info File</label>
+          <input type="checkbox" id="exportWithInfoFile" />
         </div>
-
         <div class="settings-option">
-          <label for="tempSetting2"><i class="fas fa-bolt"></i> Temp Setting 2</label>
-          <label class="switch">
-            <input type="checkbox" id="tempSetting2">
-            <span class="slider round"></span>
-          </label>
+          <label for="enableHighQuality">High Quality (WAV)</label>
+          <input type="checkbox" id="enableHighQuality" />
         </div>
+      </div>
+      <div class="modal-footer">
+        <button id="clearRecordingsBtn" class="danger-btn">
+          <i class="fas fa-trash"></i>
+          Clear All Recordings
+        </button>
+        <button id="exportAllRecordingsBtn" class="secondary-btn">
+          <i class="fas fa-file-export"></i>
+          Export All
+        </button>
       </div>
     </div>
   </div>
 
+  <!-- Storage Warning Modal -->
+  <div id="warningModal" class="modal warning">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Storage Warning</h3>
+        <button class="close-btn" aria-label="Close Warning">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="warningMessage"></p>
+        <ul class="warning-tips">
+          <li>Delete old recordings to free up space.</li>
+          <li>Export recordings to save them externally.</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button class="secondary-btn" id="warningOkBtn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generic Modal (Info / Success / Error / Confirm) -->
+  <div id="genericModal" class="modal info">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3 id="genericModalTitle">Information</h3>
+        <button class="close-btn" aria-label="Close Modal">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      <div class="modal-body" id="genericModalBody"></div>
+      <div class="modal-footer" id="genericModalFooter"></div>
+    </div>
+  </div>
+
+  <!-- Recording Card Template -->
   <template id="recordingTemplate">
     <div class="recording-card" data-id="">
       <div class="card-header">
@@ -157,9 +189,15 @@
         <button class="icon-btn delete-btn" title="Delete">
           <i class="fas fa-trash"></i>
         </button>
+
+        <button class="icon-btn export-btn" title="Export">
+          <i class="fas fa-download"></i>
+        </button>
       </div>
     </div>
   </template>
+
+  <script src="reverse.js"></script>
 </body>
 
 </html>

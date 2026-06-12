@@ -1,28 +1,17 @@
-/**
- * @fileoverview Reverse Audio Application Core - Enhanced UI Release Engine
- * Features ProWaveformEngine upgraded with dynamic view collapses, 
- * glassmorphism cozy overlay binding, operational status locking, and localized dictionary trees.
- */
-
 window.addEventListener('DOMContentLoaded', () => {
     const APP_NAME = 'REVERSE';
 
     const APP_CONFIG = {
-        MAX_RECORDINGS: 20,
+        MAX_RECORDINGS: 100,
         MAX_RECORDING_SIZE: 48 * 1024 * 1024,
         TOTAL_STORAGE_LIMIT: 74 * 1024 * 1024,
-        RECORDING_WARNING_THRESHOLD_YELLOW: 10,
-        RECORDING_WARNING_THRESHOLD_RED: 18,
+        RECORDING_WARNING_THRESHOLD_YELLOW: 28,
+        RECORDING_WARNING_THRESHOLD_RED: 88,
         STORAGE_WARNING_THRESHOLD: 48 * 1024 * 1024,
         SPEED_LEVELS: [.28, .48, .74, .88, 1, 1.4, 2.08, 3.3],
-        DB: { NAME: 'AudioReverserDB', VERSION: 3 },
-        MIN_LOOP_DRAG_DISTANCE: 4,
-        DEBOUNCE_TIMES: { RECORD: 300, PLAYBACK: 150, EXPORT: 500 },
-        ZOOM: {
-            MIN_WINDOW_DURATION: 0.05,
-            SENSITIVITY: 0.12,
-            LERP_FACTOR: 0.22
-        }
+        DB: { NAME: 'AudioReverserDB', VERSION: 2 },
+        MIN_LOOP_DRAG_DISTANCE: 5,
+        DEBOUNCE_TIMES: { RECORD: 1000, PLAYBACK: 500, EXPORT: 1000 }
     };
 
     const ELEMENTS = {
@@ -35,18 +24,7 @@ window.addEventListener('DOMContentLoaded', () => {
         statusMessage: document.getElementById('statusMessage'),
         sortSelect: document.getElementById('sortSelect'),
         storageStatus: document.getElementById('storageStatus'),
-        settingsModalBtn: document.getElementById('settingsBtn'),
-        settingsModal: document.getElementById('settingsModal'),
-        closeSettingsBtn: document.querySelector('#settingsModal .close-btn'),
-        recorderPanel: document.getElementById('recorderPanel'),
-        togglePanelBtn: document.getElementById('togglePanelBtn'),
-        langSelect: document.getElementById('langSelect'),
-        clearAllRecordingsBtn: document.getElementById('clearAllRecordingsBtn'),
-        infoModal: document.getElementById('infoModal'),
-        infoModalTitle: document.getElementById('infoModalTitle'),
-        infoModalMessage: document.getElementById('infoModalMessage'),
-        infoModalOkBtn: document.getElementById('infoModalOkBtn'),
-        infoModalCloseBtn: document.querySelector('#infoModal .close-btn')
+        settingsBtn: document.getElementById('settingsBtn')
     };
 
     const STATE = {
@@ -58,7 +36,6 @@ window.addEventListener('DOMContentLoaded', () => {
         analyserNode: null,
         recordingChunks: [],
         visualizerAnimationFrameId: null,
-        
         currentPlayback: {
             id: null,
             sourceNode: null,
@@ -67,6 +44,7 @@ window.addEventListener('DOMContentLoaded', () => {
             isReversed: false,
             playbackStartTimestamp: 0,
             pauseTime: 0,
+            currentDuration: 0,
             loopStart: 0,
             loopEnd: 0,
             cardElement: null,
@@ -75,317 +53,18 @@ window.addEventListener('DOMContentLoaded', () => {
             playbackRate: 1,
             loopEnabled: false
         },
-        
         dbInstance: null,
         sortOrder: 'newest',
         allRecordings: [],
-        cachedPeaks: {},      
-        viewStates: {},       
+        settings: {
+            exportOriginalAndReversed: false,
+            exportWithInfoFile: false,
+            enableHighQuality: false,
+            exportAllRecordings: false
+        },
         activeOperations: { recording: false, playback: false, export: false },
         debounceTimers: { record: null, playback: null, export: null },
-        audioElement: null,
-        currentLanguage: 'en'
-    };
-
-    /**
-     * Micro Localization Engine
-     */
-    const I18N = {
-        dict: {},
-        async init() {
-            try {
-                const res = await fetch('strings.json');
-                this.dict = await res.json();
-                this.translateDOM(document);
-            } catch (err) {
-                console.error("Localization engine failed to bind dictionary streams", err);
-            }
-        },
-        get(key, replacements = {}) {
-            let value = this.dict[key] || key;
-            Object.keys(replacements).forEach(k => {
-                value = value.replace(`{${k}}`, replacements[k]);
-            });
-            return value;
-        },
-        translateDOM(rootContext) {
-            rootContext.querySelectorAll('[data-i18n]').forEach(el => {
-                const key = el.getAttribute('data-i18n');
-                if (this.dict[key]) el.textContent = this.dict[key];
-            });
-            rootContext.querySelectorAll('[data-i18n-title]').forEach(el => {
-                const key = el.getAttribute('data-i18n-title');
-                if (this.dict[key]) el.setAttribute('title', this.dict[key]);
-            });
-            rootContext.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
-                const key = el.getAttribute('data-i18n-aria-label');
-                if (this.dict[key]) el.setAttribute('aria-label', this.dict[key]);
-            });
-        }
-    };
-
-    /**
-     * ProWaveformEngine - Advanced DSP Sub-pixel Vector Rendering Matrix
-     */
-    const ProWaveformEngine = {
-        generateCache(recordingId, buffer, blockSize = 32) {
-            const numChannels = buffer.numberOfChannels;
-            const len = buffer.length;
-            const numBlocks = Math.ceil(len / blockSize);
-            const maxPeaks = new Float32Array(numBlocks);
-            const minPeaks = new Float32Array(numBlocks);
-
-            const channels = [];
-            for (let ch = 0; ch < numChannels; ch++) {
-                channels.push(buffer.getChannelData(ch));
-            }
-
-            for (let i = 0; i < numBlocks; i++) {
-                const start = i * blockSize;
-                const end = Math.min(start + blockSize, len);
-                let max = 0;
-                let min = 0;
-
-                for (let j = start; j < end; j++) {
-                    for (let ch = 0; ch < numChannels; ch++) {
-                        const val = channels[ch][j];
-                        if (val > max) max = val;
-                        if (val < min) min = val;
-                    }
-                }
-                maxPeaks[i] = max;
-                minPeaks[i] = min;
-            }
-
-            STATE.cachedPeaks[recordingId] = {
-                maxPeaks,
-                minPeaks,
-                blockSize,
-                totalSamples: len,
-                duration: buffer.duration
-            };
-        },
-
-        render(recordingId, canvas, viewStartSec, viewEndSec, playheadSec, dragStartSec = -1, dragEndSec = -1, loopStartSec = 0, loopEndSec = 0) {
-            if (!canvas) return;
-            const cache = STATE.cachedPeaks[recordingId];
-            if (!cache) return;
-
-            const ctx = canvas.getContext('2d');
-            const dpr = window.devicePixelRatio || 1;
-            const rectWidth = canvas.offsetWidth;
-            const rectHeight = canvas.offsetHeight;
-
-            if (canvas.width !== rectWidth * dpr || canvas.height !== rectHeight * dpr) {
-                canvas.width = rectWidth * dpr;
-                canvas.height = rectHeight * dpr;
-            }
-
-            ctx.save();
-            ctx.scale(dpr, dpr);
-            ctx.clearRect(0, 0, rectWidth, rectHeight);
-
-            const centerY = rectHeight / 2;
-            const ampHeight = rectHeight * 0.42;
-            const totalDuration = cache.duration;
-            const viewDuration = viewEndSec - viewStartSec;
-
-            if (viewDuration <= 0) {
-                ctx.restore();
-                return;
-            }
-
-            const topPoints = new Float32Array(rectWidth);
-            const bottomPoints = new Float32Array(rectWidth);
-
-            for (let col = 0; col < rectWidth; col++) {
-                const fracSampleStart = ((viewStartSec + (col / rectWidth) * viewDuration) / totalDuration) * cache.totalSamples;
-                const fracSampleEnd = ((viewStartSec + ((col + 1) / rectWidth) * viewDuration) / totalDuration) * cache.totalSamples;
-
-                const cacheIdxStart = fracSampleStart / cache.blockSize;
-                const cacheIdxEnd = fracSampleEnd / cache.blockSize;
-
-                let maxVal = 0.005;
-                let minVal = -0.005;
-
-                if (cacheIdxEnd - cacheIdxStart < 1.0) {
-                    const baseIdx = Math.floor(cacheIdxStart);
-                    const nextIdx = Math.min(baseIdx + 1, cache.maxPeaks.length - 1);
-                    const weight = cacheIdxStart - baseIdx;
-
-                    if (baseIdx < cache.maxPeaks.length) {
-                        maxVal = cache.maxPeaks[baseIdx] * (1 - weight) + cache.maxPeaks[nextIdx] * weight;
-                        minVal = cache.minPeaks[baseIdx] * (1 - weight) + cache.minPeaks[nextIdx] * weight;
-                    }
-                } else {
-                    const idxS = Math.max(0, Math.floor(cacheIdxStart));
-                    const idxE = Math.min(cache.maxPeaks.length, Math.ceil(cacheIdxEnd));
-                    for (let k = idxS; k < idxE; k++) {
-                        if (cache.maxPeaks[k] > maxVal) maxVal = cache.maxPeaks[k];
-                        if (cache.minPeaks[k] < minVal) minVal = cache.minPeaks[k];
-                    }
-                }
-
-                topPoints[col] = centerY - (maxVal * ampHeight);
-                bottomPoints[col] = centerY - (minVal * ampHeight);
-            }
-
-            const playheadPercent = (playheadSec - viewStartSec) / viewDuration;
-            const playheadX = Math.max(0, Math.min(rectWidth, playheadPercent * rectWidth));
-
-            const drawAmbientGlowPass = (clipXStart, clipXEnd, useActiveColors) => {
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(clipXStart, 0, clipXEnd - clipXStart, rectHeight);
-                ctx.clip();
-
-                ctx.beginPath();
-                ctx.moveTo(0, centerY);
-                for (let x = 0; x < rectWidth; x++) ctx.lineTo(x, topPoints[x]);
-                ctx.lineTo(rectWidth, centerY);
-                for (let x = rectWidth - 1; x >= 0; x--) ctx.lineTo(x, bottomPoints[x]);
-                ctx.closePath();
-
-                ctx.shadowColor = useActiveColors ? 'rgba(160, 118, 249, 0.7)' : 'rgba(122, 82, 201, 0.2)';
-                ctx.shadowBlur = useActiveColors ? 16 : 8;
-                ctx.shadowOffsetY = 2;
-
-                ctx.fillStyle = useActiveColors ? 'rgba(122, 82, 201, 0.25)' : 'rgba(62, 50, 86, 0.12)';
-                ctx.fill();
-                ctx.restore();
-            };
-
-            const drawLiquidGlassPass = (clipXStart, clipXEnd, useActiveColors) => {
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(clipXStart, 0, clipXEnd - clipXStart, rectHeight);
-                ctx.clip();
-
-                ctx.beginPath();
-                ctx.moveTo(0, centerY);
-                for (let x = 0; x < rectWidth; x++) ctx.lineTo(x, topPoints[x]);
-                ctx.lineTo(rectWidth, centerY);
-                for (let x = rectWidth - 1; x >= 0; x--) ctx.lineTo(x, bottomPoints[x]);
-                ctx.closePath();
-
-                const liquidGrad = ctx.createLinearGradient(0, centerY - ampHeight, 0, centerY + ampHeight);
-                if (useActiveColors) {
-                    liquidGrad.addColorStop(0.0, 'rgba(185, 155, 255, 0.85)');
-                    liquidGrad.addColorStop(0.25, 'rgba(160, 118, 249, 0.45)');
-                    liquidGrad.addColorStop(0.48, 'rgba(122, 82, 201, 0.22)');
-                    liquidGrad.addColorStop(0.52, 'rgba(95, 59, 163, 0.32)');
-                    liquidGrad.addColorStop(0.75, 'rgba(122, 82, 201, 0.55)');
-                    liquidGrad.addColorStop(1.0, 'rgba(160, 118, 249, 0.9)');
-                } else {
-                    liquidGrad.addColorStop(0.0, 'rgba(110, 90, 160, 0.35)');
-                    liquidGrad.addColorStop(0.25, 'rgba(62, 50, 86, 0.22)');
-                    liquidGrad.addColorStop(0.5, 'rgba(28, 24, 40, 0.4)');
-                    liquidGrad.addColorStop(0.75, 'rgba(46, 36, 68, 0.22)');
-                    liquidGrad.addColorStop(1.0, 'rgba(75, 60, 115, 0.45)');
-                }
-
-                ctx.fillStyle = liquidGrad;
-                ctx.fill();
-                ctx.fillStyle = useActiveColors ? 'rgba(255, 255, 255, 0.04)' : 'rgba(255, 255, 255, 0.01)';
-                ctx.fill();
-                ctx.restore();
-            };
-
-            const drawSpecularContourPass = (clipXStart, clipXEnd, useActiveColors) => {
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(clipXStart, 0, clipXEnd - clipXStart, rectHeight);
-                ctx.clip();
-
-                ctx.beginPath();
-                ctx.moveTo(0, topPoints[0]);
-                for (let x = 1; x < rectWidth; x++) ctx.lineTo(x, topPoints[x]);
-                ctx.strokeStyle = useActiveColors ? '#f1ebff' : 'rgba(177, 142, 255, 0.35)';
-                ctx.lineWidth = 1.25;
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(0, topPoints[0] + 1.5);
-                for (let x = 1; x < rectWidth; x++) ctx.lineTo(x, topPoints[x] + 1.5);
-                ctx.strokeStyle = useActiveColors ? 'rgba(255, 255, 255, 0.38)' : 'rgba(255, 255, 255, 0.06)';
-                ctx.lineWidth = 0.75;
-                ctx.stroke();
-
-                ctx.beginPath();
-                ctx.moveTo(0, bottomPoints[0]);
-                for (let x = 1; x < rectWidth; x++) ctx.lineTo(x, bottomPoints[x]);
-                ctx.strokeStyle = useActiveColors ? 'rgba(160, 118, 249, 0.75)' : 'rgba(122, 82, 201, 0.2)';
-                ctx.lineWidth = 1.0;
-                ctx.stroke();
-
-                ctx.restore();
-            };
-
-            drawAmbientGlowPass(0, rectWidth, false);
-            drawLiquidGlassPass(0, rectWidth, false);
-            drawSpecularContourPass(0, rectWidth, false);
-
-            if (playheadX > 0) {
-                drawAmbientGlowPass(0, playheadX, true);
-                drawLiquidGlassPass(0, playheadX, true);
-                drawSpecularContourPass(0, playheadX, true);
-            }
-
-            const renderOverlayZone = (start, end, fill, stroke) => {
-                if (end <= start) return;
-                const visS = Math.max(viewStartSec, start);
-                const visE = Math.min(viewEndSec, end);
-                if (visE <= visS) return;
-
-                const xS = ((visS - viewStartSec) / viewDuration) * rectWidth;
-                const xE = ((visE - viewStartSec) / viewDuration) * rectWidth;
-
-                ctx.fillStyle = fill;
-                ctx.fillRect(xS, 0, xE - xS, rectHeight);
-                ctx.strokeStyle = stroke;
-                ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(xS, 0); ctx.lineTo(xS, rectHeight);
-                ctx.moveTo(xE, 0); ctx.lineTo(xE, rectHeight);
-                ctx.stroke();
-            };
-
-            if (loopEndSec > loopStartSec) {
-                renderOverlayZone(loopStartSec, loopEndSec, 'rgba(160, 118, 249, 0.08)', 'rgba(160, 118, 249, 0.4)');
-            }
-            if (dragEndSec > dragStartSec) {
-                renderOverlayZone(dragStartSec, dragEndSec, 'rgba(255, 255, 255, 0.04)', 'rgba(255, 255, 255, 0.3)');
-            }
-
-            if (playheadSec >= viewStartSec && playheadSec <= viewEndSec) {
-                ctx.save();
-                ctx.shadowColor = '#b18eff';
-                ctx.shadowBlur = 10;
-                ctx.strokeStyle = '#ffffff';
-                ctx.lineWidth = 1.5;
-                
-                ctx.beginPath();
-                ctx.moveTo(playheadX, 0);
-                ctx.lineTo(playheadX, rectHeight);
-                ctx.stroke();
-                ctx.restore();
-
-                ctx.fillStyle = '#ffffff';
-                ctx.beginPath();
-                ctx.arc(playheadX, 2, 2, 0, Math.PI * 2);
-                ctx.arc(playheadX, rectHeight - 2, 2, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
-            ctx.beginPath();
-            ctx.moveTo(0, centerY);
-            ctx.lineTo(rectWidth, centerY);
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.02)';
-            ctx.lineWidth = 1;
-            ctx.stroke();
-
-            ctx.restore();
-        }
+        audioElement: null
     };
 
     function debounce(action, type, callback) {
@@ -400,40 +79,38 @@ window.addEventListener('DOMContentLoaded', () => {
             } finally {
                 STATE.activeOperations[type] = false;
             }
-        }, APP_CONFIG.DEBOUNCE_TIMES[type.toUpperCase()]);
+        }, APP_CONFIG.DEBOUNCE_TIMES[type]);
     }
 
     function updatePlayButton(button, isPlaying) {
-        if (!button) return;
         const icon = button.querySelector('i');
+        const text = button.querySelector('span');
         if (isPlaying) {
             button.classList.add('playing');
-            if (icon) icon.className = 'fas fa-pause';
+            icon.className = 'fas fa-pause';
+            text.textContent = 'Pause';
         } else {
             button.classList.remove('playing');
-            if (icon) icon.className = 'fas fa-play';
+            icon.className = 'fas fa-play';
+            text.textContent = 'Play';
         }
     }
 
     async function initExtension() {
         try {
             initTheme();
-            await I18N.init();
+            initSettings();
             STATE.dbInstance = await openDatabase();
             STATE.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             setupVisualizer(null);
-            
-            // Load custom settings definitions from storage if available
-            await loadExtensionSettings();
-            
             await loadRecordings();
             updateStorageStatus();
             checkAndShowWarningModal();
             setupEventListeners();
-            ELEMENTS.statusMessage.textContent = I18N.get('status_ready');
+            ELEMENTS.statusMessage.textContent = 'Ready';
         } catch (error) {
-            handleError(error, 'Initialization');
-            ELEMENTS.statusMessage.textContent = I18N.get('status_init_failed');
+            handleError(error, 'Initialization failed. Check browser console for details.');
+            ELEMENTS.statusMessage.textContent = 'Initialization failed';
         }
     }
 
@@ -444,74 +121,87 @@ window.addEventListener('DOMContentLoaded', () => {
             request.onsuccess = (event) => resolve(event.target.result);
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
-                if (db.objectStoreNames.contains('recordings')) {
-                    db.deleteObjectStore('recordings');
+                if (!db.objectStoreNames.contains('recordings')) {
+                    const store = db.createObjectStore('recordings', { keyPath: 'id' });
+                    store.createIndex('createdAt', 'createdAt', { unique: false });
                 }
-                const store = db.createObjectStore('recordings', { keyPath: 'id' });
-                store.createIndex('createdAt', 'createdAt', { unique: false });
             };
         });
     }
 
     async function getRecordingsFromDB() {
         return new Promise((resolve, reject) => {
-            const transaction = STATE.dbInstance.transaction(['recordings'], 'readonly');
-            const store = transaction.objectStore('recordings');
-            const request = store.getAll();
-            request.onsuccess = () => resolve(request.result);
-            request.onerror = (event) => reject(new Error(`Failed to retrieve recordings: ${event.target.error.message}`));
+            try {
+                const transaction = STATE.dbInstance.transaction(['recordings'], 'readonly');
+                const store = transaction.objectStore('recordings');
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = (event) => reject(new Error(`Failed to get recordings: ${event.target.error.message}`));
+            } catch (error) {
+                handleError(error, 'getRecordingsFromDB');
+                reject(error);
+            }
         });
     }
 
     async function saveRecording(recording) {
         return new Promise((resolve, reject) => {
-            const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
-            const store = transaction.objectStore('recordings');
-            const request = store.put(recording);
-            request.onsuccess = () => resolve();
-            request.onerror = (event) => reject(new Error(`Failed to save recording: ${event.target.error.message}`));
+            try {
+                const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
+                const store = transaction.objectStore('recordings');
+                const request = store.put(recording);
+                request.onsuccess = () => resolve();
+                request.onerror = (event) => reject(new Error(`Failed to save recording: ${event.target.error.message}`));
+            } catch (error) {
+                handleError(error, 'saveRecording');
+                reject(error);
+            }
+        });
+    }
+
+    async function updateRecordingInDB(recording) {
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
+                const store = transaction.objectStore('recordings');
+                const request = store.put(recording);
+                request.onsuccess = () => resolve();
+                request.onerror = (event) => reject(new Error(`Failed to update recording: ${event.target.error.message}`));
+            } catch (error) {
+                handleError(error, 'updateRecordingInDB');
+                reject(error);
+            }
         });
     }
 
     async function deleteRecordingFromDB(id) {
         return new Promise((resolve, reject) => {
-            const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
-            const store = transaction.objectStore('recordings');
-            const request = store.delete(id);
-            request.onsuccess = () => resolve();
-            request.onerror = (event) => reject(new Error(`Failed to delete recording: ${event.target.error.message}`));
-        });
-    }
-
-    async function clearAllRecordingsFromDB() {
-        return new Promise((resolve, reject) => {
-            const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
-            const store = transaction.objectStore('recordings');
-            const request = store.clear();
-            request.onsuccess = () => resolve();
-            request.onerror = (event) => reject(new Error(`Failed to empty database: ${event.target.error.message}`));
+            try {
+                const transaction = STATE.dbInstance.transaction(['recordings'], 'readwrite');
+                const store = transaction.objectStore('recordings');
+                const request = store.delete(id);
+                request.onsuccess = () => resolve();
+                request.onerror = (event) => reject(new Error(`Failed to delete recording: ${event.target.error.message}`));
+            } catch (error) {
+                handleError(error, 'deleteRecordingFromDB');
+                reject(error);
+            }
         });
     }
 
     async function captureTabAudio() {
         return new Promise((resolve, reject) => {
-            if (typeof chrome !== 'undefined' && chrome.tabCapture) {
-                chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
-                    if (chrome.runtime.lastError || !stream) {
-                        reject(new Error(chrome.runtime.lastError?.message || 'Failed to capture tab audio'));
-                        return;
-                    }
-                    STATE.audioElement = new Audio();
-                    STATE.audioElement.srcObject = stream;
-                    STATE.audioElement.play().catch(e => console.error('Audio stream pass-through error:', e));
-                    resolve(stream);
-                });
-            } else {
-                // Fallback for standalone/development sandboxes
-                navigator.mediaDevices.getUserMedia({ audio: true })
-                    .then(stream => resolve(stream))
-                    .catch(err => reject(new Error(`User media capture blocked or unconfigured: ${err.message}`)));
-            }
+            chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
+                if (chrome.runtime.lastError || !stream) {
+                    const errorMessage = chrome.runtime.lastError?.message || 'Failed to capture tab audio';
+                    reject(new Error(errorMessage));
+                    return;
+                }
+                STATE.audioElement = new Audio();
+                STATE.audioElement.srcObject = stream;
+                STATE.audioElement.play().catch(e => console.error('Audio playback error:', e));
+                resolve(stream);
+            });
         });
     }
 
@@ -520,621 +210,1060 @@ window.addEventListener('DOMContentLoaded', () => {
             const arrayBuffer = await audioData.arrayBuffer();
             const audioBuffer = await STATE.audioContext.decodeAudioData(arrayBuffer);
             const sampleRate = audioBuffer.sampleRate;
-            const numChannels = audioBuffer.numberOfChannels;
             const silenceSamples = sampleRate * 1;
             const newLength = audioBuffer.length + (silenceSamples * 2);
-            const paddedBuffer = STATE.audioContext.createBuffer(numChannels, newLength, sampleRate);
-            const originalSerialized = [];
-
-            for (let channel = 0; channel < numChannels; channel++) {
-                const srcData = audioBuffer.getChannelData(channel);
-                const destData = paddedBuffer.getChannelData(channel);
-                for (let i = 0; i < silenceSamples; i++) destData[i] = 0;
-                for (let i = 0; i < srcData.length; i++) destData[i + silenceSamples] = srcData[i];
-                for (let i = silenceSamples + srcData.length; i < newLength; i++) destData[i] = 0;
-                originalSerialized.push(Array.from(destData));
+            const paddedBuffer = STATE.audioContext.createBuffer(
+                audioBuffer.numberOfChannels,
+                newLength,
+                sampleRate
+            );
+            for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+                const originalData = audioBuffer.getChannelData(channel);
+                const paddedData = paddedBuffer.getChannelData(channel);
+                for (let i = 0; i < silenceSamples; i++) paddedData[i] = 0;
+                for (let i = 0; i < originalData.length; i++) paddedData[i + silenceSamples] = originalData[i];
+                for (let i = silenceSamples + originalData.length; i < newLength; i++) paddedData[i] = 0;
             }
-            return { original: originalSerialized, duration: Math.round(paddedBuffer.duration * 1000) };
+            const reversedBuffer = STATE.audioContext.createBuffer(
+                audioBuffer.numberOfChannels,
+                newLength,
+                sampleRate
+            );
+            for (let channel = 0; channel < audioBuffer.numberOfChannels; channel++) {
+                const originalData = audioBuffer.getChannelData(channel);
+                const reversedData = reversedBuffer.getChannelData(channel);
+                for (let i = 0; i < silenceSamples; i++) reversedData[i] = 0;
+                for (let i = 0; i < originalData.length; i++) reversedData[i + silenceSamples] = originalData[originalData.length - 1 - i];
+                for (let i = silenceSamples + originalData.length; i < newLength; i++) reversedData[i] = 0;
+            }
+            return {
+                original: Array.from(paddedBuffer.getChannelData(0)),
+                reversed: Array.from(reversedBuffer.getChannelData(0)),
+                duration: Math.round(paddedBuffer.duration * 1000)
+            };
         } catch (error) {
-            throw new Error(`Audio compilation sequence failed: ${error.message}`);
+            handleError(error, 'Audio Processing');
+            throw new Error(`Audio processing failed: ${error.message}`);
         }
     }
 
-    function buildAudioBufferFromSerialized(serialized, reverseSamples = false) {
-        if (!STATE.audioContext) throw new Error('AudioContext missing.');
-        const sampleRate = STATE.audioContext.sampleRate;
-        const numChannels = serialized.length;
-        const length = serialized[0].length;
-        const audioBuffer = STATE.audioContext.createBuffer(numChannels, length, sampleRate);
-
-        for (let ch = 0; ch < numChannels; ch++) {
-            const channelData = audioBuffer.getChannelData(ch);
-            if (reverseSamples) {
-                for (let i = 0; i < length; i++) {
-                    channelData[i] = serialized[ch][length - 1 - i];
-                }
-            } else {
-                channelData.set(serialized[ch]);
-            }
-        }
-        return audioBuffer;
-    }
-
-    function getLivePlaybackTime() {
-        const cp = STATE.currentPlayback;
-        if (cp.isPaused || !cp.audioBuffer) return cp.pauseTime;
-        const elapsed = (STATE.audioContext.currentTime - cp.playbackStartTimestamp) * cp.playbackRate;
-        const duration = cp.audioBuffer.duration;
-
-        if (!cp.isReversed) {
-            let currentPos = cp.startOffset + elapsed;
-            if (cp.loopEnabled && cp.loopEnd > cp.loopStart) {
-                const loopLen = cp.loopEnd - cp.loopStart;
-                if (loopLen > 0 && currentPos >= cp.loopStart) {
-                    currentPos = cp.loopStart + ((currentPos - cp.loopStart) % loopLen);
-                }
-            }
-            return Math.max(0, Math.min(currentPos, duration));
-        } else {
-            const offsetRev = duration - cp.startOffset;
-            let currentPosRev = offsetRev + elapsed;
-            if (cp.loopEnabled) {
-                const loopStartRev = duration - cp.loopEnd;
-                const loopEndRev = duration - cp.loopStart;
-                const loopLen = loopEndRev - loopStartRev;
-                if (loopLen > 0 && currentPosRev >= loopStartRev) {
-                    currentPosRev = loopStartRev + ((currentPosRev - loopStartRev) % loopLen);
-                }
-            }
-            return Math.max(0, Math.min(duration - currentPosRev, duration));
+    async function deserializeAudioBuffer(serialized) {
+        try {
+            if (!STATE.audioContext) throw new Error('AudioContext not initialized.');
+            const audioBuffer = STATE.audioContext.createBuffer(1, serialized.length, STATE.audioContext.sampleRate);
+            audioBuffer.getChannelData(0).set(new Float32Array(serialized));
+            return audioBuffer;
+        } catch (error) {
+            handleError(error, 'Deserializing audio buffer');
+            throw error;
         }
     }
 
     function stopPlayback() {
         const cp = STATE.currentPlayback;
         if (cp.sourceNode) {
-            try { cp.sourceNode.stop(); } catch (e) {}
-            cp.sourceNode.disconnect();
+            try {
+                cp.sourceNode.onended = null;
+                cp.sourceNode.stop();
+                cp.sourceNode.disconnect();
+            } catch (e) {}
             cp.sourceNode = null;
         }
         if (cp.playbackAnimationFrameId) {
             cancelAnimationFrame(cp.playbackAnimationFrameId);
             cp.playbackAnimationFrameId = null;
         }
-        cp.isPaused = true;
-        updatePlayButton(cp.cardElement?.querySelector('.play-btn'), false);
     }
 
-    async function startPlayback(recordingId, startFromSec = 0) {
+    function pausePlayback() {
+        const cp = STATE.currentPlayback;
+        if (cp.isPaused || !cp.sourceNode || !cp.audioBuffer) return;
+        const now = STATE.audioContext.currentTime;
+        const playedSinceStart = (now - cp.playbackStartTimestamp) * cp.playbackRate;
+        let newPause = cp.startOffset + playedSinceStart;
+        if (cp.loopEnabled && cp.loopEnd > cp.loopStart) {
+            const loopLength = cp.loopEnd - cp.loopStart;
+            if (loopLength > 0) {
+                const relative = newPause - cp.loopStart;
+                newPause = cp.loopStart + ((relative % loopLength) + loopLength) % loopLength;
+            }
+        }
+        if (newPause < 0) newPause = 0;
+        if (newPause > cp.audioBuffer.duration) newPause = cp.audioBuffer.duration;
+        cp.pauseTime = newPause;
+        cp.isPaused = true;
         stopPlayback();
+        updatePlaybackUI();
+        ELEMENTS.statusMessage.textContent = 'Paused';
+    }
+
+    async function startPlayback(recordingId, reverse = false, startTime = 0, loopStart = 0, loopEnd = 0, speed = 1) {
+        stopPlayback();
+        try {
+            STATE.activeOperations.playback = true;
+            ELEMENTS.statusMessage.textContent = 'Loading recording...';
+            const recording = STATE.allRecordings.find(r => r.id === recordingId);
+            if (!recording) throw new Error('Recording not found in state.');
+            const card = document.querySelector(`.recording-card[data-id="${recordingId}"]`);
+            const serialized = reverse ? recording.reversed : recording.original;
+            const buffer = buildAudioBufferFromSerialized(serialized);
+            const duration = buffer.duration || (recording.duration / 1000) || 0;
+            const safeStart = Math.max(0, Math.min(startTime, duration));
+            const safeLoopStart = Math.max(0, Math.min(loopStart, duration));
+            const safeLoopEnd = Math.max(0, Math.min(loopEnd, duration));
+            const sourceNode = STATE.audioContext.createBufferSource();
+            sourceNode.buffer = buffer;
+            sourceNode.playbackRate.value = speed;
+            sourceNode.connect(STATE.audioContext.destination);
+            const cp = STATE.currentPlayback;
+            cp.id = recordingId;
+            cp.sourceNode = sourceNode;
+            cp.audioBuffer = buffer;
+            cp.cardElement = card;
+            cp.isPaused = false;
+            cp.isReversed = !!reverse;
+            cp.startOffset = safeStart;
+            cp.pauseTime = safeStart;
+            cp.loopStart = safeLoopStart;
+            cp.loopEnd = safeLoopEnd;
+            cp.playbackRate = speed;
+            cp.loopEnabled = safeLoopEnd > safeLoopStart;
+            let playbackOffsetInBuffer = safeStart;
+            let srcLoopStart = safeLoopStart;
+            let srcLoopEnd = safeLoopEnd;
+            if (reverse) {
+                playbackOffsetInBuffer = Math.max(0, buffer.duration - safeStart);
+                srcLoopStart = Math.max(0, buffer.duration - safeLoopEnd);
+                srcLoopEnd = Math.max(0, buffer.duration - safeLoopStart);
+            }
+            if (cp.loopEnabled && srcLoopEnd > srcLoopStart) {
+                sourceNode.loop = true;
+                sourceNode.loopStart = srcLoopStart;
+                sourceNode.loopEnd = srcLoopEnd;
+            } else {
+                sourceNode.loop = false;
+            }
+            cp.playbackStartTimestamp = STATE.audioContext.currentTime;
+            sourceNode.start(0, playbackOffsetInBuffer);
+            sourceNode.onended = () => {
+                if (STATE.currentPlayback.id === recordingId && !sourceNode.loop && !STATE.currentPlayback.isPaused) {
+                    resetPlaybackState();
+                }
+            };
+            updatePlaybackUI();
+            ELEMENTS.statusMessage.textContent = reverse ? 'Playing reversed...' : 'Playing...';
+        } catch (error) {
+            handleError(error, 'Playback');
+            resetPlaybackState();
+        } finally {
+            STATE.activeOperations.playback = false;
+        }
+    }
+
+    function resetPlaybackState() {
+        stopPlayback();
+        STATE.currentPlayback = {
+            id: null,
+            sourceNode: null,
+            audioBuffer: null,
+            isPaused: true,
+            isReversed: false,
+            playbackStartTimestamp: 0,
+            pauseTime: 0,
+            currentDuration: 0,
+            loopStart: 0,
+            loopEnd: 0,
+            cardElement: null,
+            playbackAnimationFrameId: null,
+            startOffset: 0,
+            playbackRate: 1,
+            loopEnabled: false
+        };
+        updateAllPlaybackCardUIs();
+        ELEMENTS.statusMessage.textContent = 'Ready';
+    }
+
+    function togglePlayPause(recordingId) {
+        const isCurrentTrack = STATE.currentPlayback.id === recordingId;
+        const isPlaying = isCurrentTrack && !STATE.currentPlayback.isPaused;
         const recording = STATE.allRecordings.find(r => r.id === recordingId);
         if (!recording) return;
-
-        const cp = STATE.currentPlayback;
-        cp.id = recordingId;
-        cp.cardElement = ELEMENTS.recordingsGrid.querySelector(`[data-id="${recordingId}"]`);
-        
-        // Intelligent Action: Collapse recording interface when listening to saved elements
-        collapseRecorderPanel(true);
-
-        if (!cp.audioBuffer || cp.id !== recordingId) {
-            ELEMENTS.statusMessage.textContent = I18N.get('status_compiling');
-            cp.audioBuffer = buildAudioBufferFromSerialized(recording.audioData.original, false);
-        }
-
-        const duration = cp.audioBuffer.duration;
-        if (startFromSec >= duration || startFromSec < 0) startFromSec = 0;
-
-        cp.startOffset = startFromSec;
-        cp.playbackStartTimestamp = STATE.audioContext.currentTime;
-        cp.isPaused = false;
-
-        cp.sourceNode = STATE.audioContext.createBufferSource();
-        cp.sourceNode.buffer = cp.audioBuffer;
-        cp.sourceNode.playbackRate.value = cp.playbackRate;
-
-        // Apply programmatic sample-inversion transformations when inverted flag is enabled
-        if (cp.isReversed) {
-            const reversedBuffer = buildAudioBufferFromSerialized(recording.audioData.original, true);
-            cp.sourceNode.buffer = reversedBuffer;
-            const revOffset = duration - startFromSec;
-            cp.sourceNode.start(0, Math.max(0, revOffset));
-            ELEMENTS.statusMessage.textContent = I18N.get('status_playing_reversed');
-        } else {
-            cp.sourceNode.start(0, startFromSec);
-            ELEMENTS.statusMessage.textContent = I18N.get('status_playing');
-        }
-
-        cp.sourceNode.connect(STATE.audioContext.destination);
-        updatePlayButton(cp.cardElement?.querySelector('.play-btn'), true);
-
-        cp.sourceNode.onended = () => {
-            if (!cp.isPaused && !cp.loopEnabled) {
-                stopPlayback();
-                cp.pauseTime = 0;
-                updateCardWaveformDisplay(recordingId);
-                ELEMENTS.statusMessage.textContent = I18N.get('status_ready');
-            }
-        };
-
-        tickPlaybackProgress(recordingId);
-    }
-
-    function tickPlaybackProgress(recordingId) {
-        const cp = STATE.currentPlayback;
-        if (cp.id !== recordingId || cp.isPaused) return;
-
-        const liveTime = getLivePlaybackTime();
-        cp.pauseTime = liveTime;
-        updateCardWaveformDisplay(recordingId, liveTime);
-
-        cp.playbackAnimationFrameId = requestAnimationFrame(() => tickPlaybackProgress(recordingId));
-    }
-
-    function updateCardWaveformDisplay(recordingId, customPlayhead = -1) {
-        const card = ELEMENTS.recordingsGrid.querySelector(`[data-id="${recordingId}"]`);
-        if (!card) return;
-
-        const canvas = card.querySelector('canvas');
-        const cache = STATE.cachedPeaks[recordingId];
-        if (!canvas || !cache) return;
-
-        const playhead = customPlayhead >= 0 ? customPlayhead : (STATE.currentPlayback.id === recordingId ? STATE.currentPlayback.pauseTime : 0);
-        const viewState = STATE.viewStates[recordingId] || { start: 0, end: cache.duration };
-
-        ProWaveformEngine.render(
-            recordingId,
-            canvas,
-            viewState.start,
-            viewState.end,
-            playhead,
-            -1, -1,
-            STATE.currentPlayback.id === recordingId && STATE.currentPlayback.loopEnabled ? STATE.currentPlayback.loopStart : 0,
-            STATE.currentPlayback.id === recordingId && STATE.currentPlayback.loopEnabled ? STATE.currentPlayback.loopEnd : 0
-        );
-
-        const progressPercent = (playhead / cache.duration) * 100;
-        const bar = card.querySelector('.playback-bar');
-        if (bar) bar.style.width = `${Math.max(0, Math.min(100, progressPercent))}%`;
-    }
-
-    function setupVisualizer(stream) {
-        if (STATE.visualizerAnimationFrameId) {
-            cancelAnimationFrame(STATE.visualizerAnimationFrameId);
-            STATE.visualizerAnimationFrameId = null;
-        }
-
-        const canvas = ELEMENTS.visualizer;
-        const ctx = canvas.getContext('2d');
-        const dpr = window.devicePixelRatio || 1;
-        
-        const resizeCanvas = () => {
-            const w = ELEMENTS.visualizerContainer.offsetWidth;
-            const h = ELEMENTS.visualizerContainer.offsetHeight;
-            if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
-                canvas.width = w * dpr;
-                canvas.height = h * dpr;
-                ctx.scale(dpr, dpr);
-            }
-        };
-        resizeCanvas();
-
-        const emptyState = ELEMENTS.visualizerContainer.querySelector('.empty-state');
-        if (!stream) {
-            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
-            if (emptyState) emptyState.style.display = 'flex';
+        if (isPlaying) {
+            pausePlayback();
             return;
         }
-
-        if (emptyState) emptyState.style.display = 'none';
-        
-        if (!STATE.analyserNode) {
-            STATE.analyserNode = STATE.audioContext.createAnalyser();
-            STATE.analyserNode.fftSize = 256;
+        if (isCurrentTrack && STATE.currentPlayback.isPaused) {
+            const cp = STATE.currentPlayback;
+            const resumeTime = typeof cp.pauseTime === 'number' ? cp.pauseTime : 0;
+            startPlayback(recordingId, cp.isReversed, resumeTime, cp.loopStart, cp.loopEnd, cp.playbackRate);
+            return;
         }
-        
-        if (STATE.mediaStreamSource) STATE.mediaStreamSource.disconnect();
-        STATE.mediaStreamSource = STATE.audioContext.createMediaStreamSource(stream);
-        STATE.mediaStreamSource.connect(STATE.analyserNode);
-
-        const bufferLength = STATE.analyserNode.frequencyBinCount;
-        const dataArray = new Uint8Array(bufferLength);
-        const w = canvas.width / dpr;
-        const h = canvas.height / dpr;
-
-        function renderFrame() {
-            if (!STATE.isRecording) return;
-            STATE.visualizerAnimationFrameId = requestAnimationFrame(renderFrame);
-
-            STATE.analyserNode.getByteFrequencyData(dataArray);
-            ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg-tertiary').trim() || '#202024';
-            ctx.fillRect(0, 0, w, h);
-
-            const barWidth = (w / bufferLength) * 1.4;
-            let barHeight;
-            let x = 0;
-
-            const accentPrimary = getComputedStyle(document.documentElement).getPropertyValue('--accent-primary').trim() || '#a076f9';
-            ctx.fillStyle = accentPrimary;
-
-            for (let i = 0; i < bufferLength; i++) {
-                barHeight = (dataArray[i] / 255) * h * 0.85;
-                ctx.beginPath();
-                ctx.roundRect(x, h - barHeight - 2, barWidth - 1, barHeight, 4);
-                ctx.fill();
-                x += barWidth;
-            }
-        }
-        renderFrame();
+        stopPlayback();
+        resetPlaybackState();
+        const startTime = 0;
+        const loopStart = 0;
+        const loopEnd = 0;
+        const speed = recording.speed || 1;
+        const isReversed = recording.isReversed;
+        startPlayback(recordingId, isReversed, startTime, loopStart, loopEnd, speed);
     }
 
-    async function toggleRecording() {
-        if (STATE.isRecording) {
-            // Stop logic sequencing
-            STATE.isRecording = false;
-            ELEMENTS.recordBtn.classList.remove('recording');
-            ELEMENTS.recordBtn.querySelector('span').textContent = I18N.get('btn_start_recording');
-            ELEMENTS.recIndicator.classList.remove('active');
-
-            if (STATE.mediaRecorder && STATE.mediaRecorder.state !== 'inactive') {
-                STATE.mediaRecorder.stop();
+    async function toggleReverse(recordingId) {
+        const recording = STATE.allRecordings.find(r => r.id === recordingId);
+        if (!recording) return;
+        recording.isReversed = !recording.isReversed;
+        await updateRecordingInDB(recording);
+        const card = document.querySelector(`.recording-card[data-id="${recordingId}"]`);
+        if (card) {
+            const reverseBtn = card.querySelector('.reverse-btn');
+            if (recording.isReversed) {
+                reverseBtn.classList.add('active');
+            } else {
+                reverseBtn.classList.remove('active');
             }
-            if (STATE.mediaStream) {
-                STATE.mediaStream.getTracks().forEach(track => track.stop());
-                STATE.mediaStream = null;
-            }
-            setupVisualizer(null);
+            card.classList.toggle('reversed', recording.isReversed);
+        }
+        const isCurrentTrack = STATE.currentPlayback.id === recordingId;
+        if (isCurrentTrack) {
+            const cp = STATE.currentPlayback;
+            const curPause = cp.isPaused ? cp.pauseTime : (() => {
+                const now = STATE.audioContext.currentTime;
+                const playedSinceStart = (now - cp.playbackStartTimestamp) * cp.playbackRate;
+                let newPause = cp.startOffset + playedSinceStart;
+                if (cp.loopEnabled && cp.loopEnd > cp.loopStart) {
+                    const loopLength = cp.loopEnd - cp.loopStart;
+                    if (loopLength > 0) {
+                        const relative = newPause - cp.loopStart;
+                        newPause = cp.loopStart + ((relative % loopLength) + loopLength) % loopLength;
+                    }
+                }
+                return Math.max(0, Math.min(newPause, cp.audioBuffer ? cp.audioBuffer.duration : newPause));
+            })();
+            const bufferDuration = cp.audioBuffer ? cp.audioBuffer.duration : (recording.duration / 1000) || 0;
+            const convertedPause = bufferDuration - curPause;
+            stopPlayback();
+            await startPlayback(recordingId, recording.isReversed, convertedPause, cp.loopStart, cp.loopEnd, cp.playbackRate);
         } else {
-            // Start verification pipeline
-            if (STATE.allRecordings.length >= APP_CONFIG.MAX_RECORDINGS) {
-                showModalNotification(I18N.get('msg_storage_limit_reached'), I18N.get('msg_purge_older'));
+            const card = document.querySelector(`.recording-card[data-id="${recordingId}"]`);
+            if (card) card.classList.toggle('reversed', recording.isReversed);
+        }
+    }
+
+    function updatePlaybackUI() {
+        const cp = STATE.currentPlayback;
+        if (!cp.id || !cp.cardElement || !cp.audioBuffer) {
+            updateAllPlaybackCardUIs();
+            return;
+        }
+        const recording = STATE.allRecordings.find(r => r.id === cp.id);
+        if (!recording) return;
+        const playingCard = cp.cardElement;
+        const canvas = playingCard.querySelector('canvas');
+        const playButton = playingCard.querySelector('.play-btn');
+        const allCards = document.querySelectorAll('.recording-card');
+        allCards.forEach(card => card.classList.remove('playing'));
+        playingCard.classList.add('playing');
+        playingCard.classList.toggle('reversed', cp.isReversed);
+        updatePlayButton(playButton, !cp.isPaused);
+        const drawFrame = () => {
+            if (STATE.currentPlayback.isPaused || !STATE.currentPlayback.id || !STATE.currentPlayback.audioBuffer) {
+                if (STATE.currentPlayback.playbackAnimationFrameId) {
+                    cancelAnimationFrame(STATE.currentPlayback.playbackAnimationFrameId);
+                    STATE.currentPlayback.playbackAnimationFrameId = null;
+                }
                 return;
             }
-
-            try {
-                if (STATE.audioContext.state === 'suspended') {
-                    await STATE.audioContext.resume();
+            const now = STATE.audioContext.currentTime;
+            const playedSinceStart = (now - STATE.currentPlayback.playbackStartTimestamp) * STATE.currentPlayback.playbackRate;
+            let currentTime = STATE.currentPlayback.startOffset + playedSinceStart;
+            if (STATE.currentPlayback.loopEnabled && STATE.currentPlayback.loopEnd > STATE.currentPlayback.loopStart) {
+                const loopDuration = STATE.currentPlayback.loopEnd - STATE.currentPlayback.loopStart;
+                if (loopDuration > 0) {
+                    const relative = currentTime - STATE.currentPlayback.loopStart;
+                    currentTime = STATE.currentPlayback.loopStart + ((relative % loopDuration) + loopDuration) % loopDuration;
                 }
-
-                STATE.mediaStream = await captureTabAudio();
-                setupVisualizer(STATE.mediaStream);
-
-                STATE.recordingChunks = [];
-                STATE.mediaRecorder = new MediaRecorder(STATE.mediaStream, { mimeType: 'audio/webm' });
-                
-                STATE.mediaRecorder.ondataavailable = (e) => {
-                    if (e.data && e.data.size > 0) STATE.recordingChunks.push(e.data);
-                };
-
-                STATE.mediaRecorder.onstop = async () => {
-                    ELEMENTS.statusMessage.textContent = I18N.get('status_parsing_stream');
-                    const blob = new Blob(STATE.recordingChunks, { type: 'audio/webm' });
-                    
-                    try {
-                        const processed = await processAudioBuffer(blob);
-                        const recordingId = `${I18N.get('recording_card_prefix') || 'Rec_'}${Date.now()}`;
-                        
-                        const newRecording = {
-                            id: recordingId,
-                            title: `Track Alpha ${STATE.allRecordings.length + 1}`,
-                            duration: processed.duration,
-                            createdAt: Date.now(),
-                            audioData: processed
-                        };
-
-                        await saveRecording(newRecording);
-                        await loadRecordings();
-                        updateStorageStatus();
-                        ELEMENTS.statusMessage.textContent = I18N.get('status_recorded_cleanly');
-                        
-                        // Smart Action Auto-collapse panel to optimize visual space for output review
-                        setTimeout(() => collapseRecorderPanel(true), 600);
-                    } catch (err) {
-                        handleError(err, 'Audio compilation sequence');
-                    }
-                };
-
-                STATE.mediaRecorder.start(250);
-                STATE.isRecording = true;
-                ELEMENTS.recordBtn.classList.add('recording');
-                ELEMENTS.recordBtn.querySelector('span').textContent = I18N.get('btn_stop_recording');
-                ELEMENTS.recIndicator.classList.add('active');
-                ELEMENTS.statusMessage.textContent = I18N.get('recording_status');
-            } catch (err) {
-                handleError(err, 'Capture Pipeline initiation');
-                STATE.isRecording = false;
-                ELEMENTS.recordBtn.classList.remove('recording');
-                ELEMENTS.recIndicator.classList.remove('active');
             }
+            if (currentTime < 0) currentTime = 0;
+            if (currentTime > STATE.currentPlayback.audioBuffer.duration) currentTime = STATE.currentPlayback.audioBuffer.duration;
+            const displayedTime = STATE.currentPlayback.isReversed ? STATE.currentPlayback.audioBuffer.duration - currentTime : currentTime;
+            drawWaveform(
+                STATE.currentPlayback.audioBuffer,
+                canvas,
+                displayedTime,
+                STATE.currentPlayback.loopStart,
+                STATE.currentPlayback.loopEnd,
+                STATE.currentPlayback.isReversed
+            );
+            STATE.currentPlayback.playbackAnimationFrameId = requestAnimationFrame(drawFrame);
+        };
+        if (!cp.isPaused) {
+            if (cp.playbackAnimationFrameId) cancelAnimationFrame(cp.playbackAnimationFrameId);
+            cp.playbackAnimationFrameId = requestAnimationFrame(drawFrame);
+        } else {
+            const displayedTime = cp.isReversed && cp.audioBuffer ? cp.audioBuffer.duration - cp.pauseTime : cp.pauseTime;
+            drawWaveform(
+                cp.audioBuffer,
+                canvas,
+                displayedTime,
+                cp.loopStart,
+                cp.loopEnd,
+                cp.isReversed
+            );
         }
+    }
+
+    function updateAllPlaybackCardUIs() {
+        document.querySelectorAll('.recording-card').forEach(card => {
+            card.classList.remove('playing');
+            card.classList.remove('reversed');
+            const playBtn = card.querySelector('.play-btn');
+            if (playBtn) updatePlayButton(playBtn, false);
+            const speedDisplay = card.querySelector('.speed-display');
+            const id = card.dataset.id;
+            const rec = STATE.allRecordings.find(r => r.id === id);
+            if (speedDisplay && rec) speedDisplay.textContent = `${(rec.speed || 1).toFixed(2)}x`;
+        });
+        document.querySelectorAll('.playback-bar').forEach(bar => bar.style.width = '0%');
+    }
+
+    async function updatePlaybackSpeed(recordingId, newSpeedIndex) {
+        const newSpeed = APP_CONFIG.SPEED_LEVELS[newSpeedIndex];
+        const recording = STATE.allRecordings.find(r => r.id === recordingId);
+        if (!recording) return;
+        recording.speed = newSpeed;
+        await updateRecordingInDB(recording);
+        const card = document.querySelector(`.recording-card[data-id="${recordingId}"]`);
+        if (card) card.querySelector('.speed-display').textContent = `${newSpeed.toFixed(2)}x`;
+        if (STATE.currentPlayback.id === recordingId) {
+            const cp = STATE.currentPlayback;
+            const wasPaused = cp.isPaused;
+            const resumePoint = wasPaused ? cp.pauseTime : (() => {
+                const now = STATE.audioContext.currentTime;
+                const playedSinceStart = (now - cp.playbackStartTimestamp) * cp.playbackRate;
+                let newPause = cp.startOffset + playedSinceStart;
+                if (cp.loopEnabled && cp.loopEnd > cp.loopStart) {
+                    const loopLength = cp.loopEnd - cp.loopStart;
+                    if (loopLength > 0) {
+                        const relative = newPause - cp.loopStart;
+                        newPause = cp.loopStart + ((relative % loopLength) + loopLength) % loopLength;
+                    }
+                }
+                return Math.max(0, Math.min(newPause, cp.audioBuffer ? cp.audioBuffer.duration : newPause));
+            })();
+            stopPlayback();
+            await startPlayback(
+                recordingId,
+                cp.isReversed,
+                resumePoint,
+                cp.loopStart,
+                cp.loopEnd,
+                newSpeed
+            );
+            if (wasPaused) pausePlayback();
+        }
+    }
+
+    function drawWaveform(buffer, canvas, currentTime = -1, loopStart = -1, loopEnd = -1, isReversed = false, dragLoopStart = -1, dragLoopEnd = -1) {
+        if (!buffer || !canvas) return;
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = canvas.offsetWidth * dpr;
+        canvas.height = canvas.offsetHeight * dpr;
+        const width = canvas.width;
+        const height = canvas.height;
+        ctx.clearRect(0, 0, width, height);
+        const data = buffer.getChannelData(0);
+        const step = Math.ceil(data.length / width);
+        const amp = height / 2;
+        const waveformFillColor = getComputedStyle(document.documentElement).getPropertyValue('--waveform-fill').trim();
+        const waveformStrokeColor = getComputedStyle(document.documentElement).getPropertyValue('--waveform-stroke').trim();
+        const waveformDragOverlay = getComputedStyle(document.documentElement).getPropertyValue('--waveform-drag-overlay').trim();
+        ctx.fillStyle = waveformFillColor;
+        ctx.beginPath();
+        ctx.moveTo(0, amp);
+        for (let i = 0; i < width; i++) {
+            let min = 1.0;
+            let max = -1.0;
+            for (let j = 0; j < step; j++) {
+                const idx = Math.min(data.length - 1, (i * step) + j);
+                const datum = data[idx];
+                if (datum < min) min = datum;
+                if (datum > max) max = datum;
+            }
+            ctx.lineTo(i, (1 + max) * amp);
+        }
+        for (let i = width - 1; i >= 0; i--) {
+            let min = 1.0;
+            for (let j = 0; j < step; j++) {
+                const idx = Math.min(data.length - 1, (i * step) + j);
+                const datum = data[idx];
+                if (datum < min) min = datum;
+            }
+            ctx.lineTo(i, (1 + min) * amp);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = waveformStrokeColor;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = waveformStrokeColor;
+        ctx.lineWidth = 1.5 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(0, amp);
+        for (let i = 0; i < width; i++) {
+            let max = -1.0;
+            for (let j = 0; j < step; j++) {
+                const idx = Math.min(data.length - 1, (i * step) + j);
+                const datum = data[idx];
+                if (datum > max) max = datum;
+            }
+            ctx.lineTo(i, (1 + max) * amp);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        if (loopEnd > loopStart) {
+            const totalDuration = buffer.duration;
+            const displayLoopStart = isReversed ? totalDuration - loopEnd : loopStart;
+            const displayLoopEnd = isReversed ? totalDuration - loopStart : loopEnd;
+            const margin = width * 0.05;
+            const startX = Math.max(margin, (displayLoopStart / totalDuration) * width);
+            const endX = Math.min(width - margin, (displayLoopEnd / totalDuration) * width);
+            ctx.fillStyle = 'rgba(108, 92, 231, 0.3)';
+            ctx.fillRect(startX, 0, endX - startX, height);
+            ctx.strokeStyle = '#6c5ce7';
+            ctx.lineWidth = 2 * dpr;
+            ctx.beginPath();
+            ctx.moveTo(startX, 0);
+            ctx.lineTo(startX, height);
+            ctx.moveTo(endX, 0);
+            ctx.lineTo(endX, height);
+            ctx.stroke();
+        }
+        if (dragLoopEnd > dragLoopStart) {
+            const totalDuration = buffer.duration;
+            const margin = width * 0.05;
+            const startX = Math.max(margin, (dragLoopStart / totalDuration) * width);
+            const endX = Math.min(width - margin, (dragLoopEnd / totalDuration) * width);
+            ctx.fillStyle = waveformDragOverlay;
+            ctx.fillRect(startX, 0, endX - startX, height);
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+            ctx.lineWidth = 2 * dpr;
+            ctx.beginPath();
+            ctx.moveTo(startX, 0);
+            ctx.lineTo(startX, height);
+            ctx.moveTo(endX, 0);
+            ctx.lineTo(endX, height);
+            ctx.stroke();
+        }
+        if (currentTime >= 0) {
+            const totalDuration = buffer.duration;
+            const margin = width * 0.05;
+            const playX = Math.max(margin, Math.min(width - margin, (currentTime / totalDuration) * width));
+            ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--waveform-progress').trim();
+            ctx.lineWidth = 2 * dpr;
+            ctx.beginPath();
+            ctx.moveTo(playX, 0);
+            ctx.lineTo(playX, height);
+            ctx.stroke();
+        }
+    }
+
+    function createRecordingCard(recording) {
+        const card = ELEMENTS.recordingTemplate.content.cloneNode(true).firstElementChild;
+        const date = new Date(recording.createdAt);
+        card.dataset.id = recording.id;
+        card.querySelector('.card-title').textContent = `Recording_${date.getHours()}${date.getMinutes()}`;
+        card.querySelector('.card-time').textContent = formatDuration(recording.duration);
+        const waveformCanvas = card.querySelector('.waveform-container canvas');
+        const playBtn = card.querySelector('.play-btn');
+        const reverseBtn = card.querySelector('.reverse-btn');
+        const deleteBtn = card.querySelector('.delete-btn');
+        const exportBtn = card.querySelector('.export-btn');
+        const speedDownBtn = card.querySelector('.speedDown');
+        const speedUpBtn = card.querySelector('.speedUp');
+        const speedDisplay = card.querySelector('.speed-display');
+        if (recording.isReversed) reverseBtn.classList.add('active');
+        speedDisplay.textContent = `${(recording.speed || 1).toFixed(2)}x`;
+        card.classList.toggle('reversed', recording.isReversed);
+        updatePlayButton(playBtn, false);
+        let waveformBuffer = null;
+        deserializeAudioBuffer(recording.original)
+            .then(buffer => {
+                waveformBuffer = buffer;
+                drawWaveform(waveformBuffer, waveformCanvas);
+            })
+            .catch(err => console.error('Waveform error:', err));
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragEndX = 0;
+        waveformCanvas.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            if (!waveformBuffer) return;
+            stopPlayback();
+            resetPlaybackState();
+            isDragging = true;
+            dragStartX = e.offsetX;
+            dragEndX = e.offsetX;
+            waveformCanvas.setPointerCapture(e.pointerId);
+        });
+        waveformCanvas.addEventListener('pointermove', (e) => {
+            if (!isDragging || !waveformBuffer) return;
+            e.preventDefault();
+            dragEndX = e.offsetX;
+            const canvasWidth = waveformCanvas.offsetWidth;
+            const totalDuration = waveformBuffer.duration;
+            const margin = canvasWidth * 0.05;
+            const constrainedStartX = Math.max(margin, Math.min(canvasWidth - margin, Math.min(dragStartX, dragEndX)));
+            const constrainedEndX = Math.max(margin, Math.min(canvasWidth - margin, Math.max(dragStartX, dragEndX)));
+            const dragLoopStart = (constrainedStartX / canvasWidth) * totalDuration;
+            const dragLoopEnd = (constrainedEndX / canvasWidth) * totalDuration;
+            drawWaveform(
+                waveformBuffer,
+                waveformCanvas,
+                -1,
+                -1,
+                -1,
+                false,
+                dragLoopStart,
+                dragLoopEnd
+            );
+        });
+        waveformCanvas.addEventListener('pointerup', (e) => {
+            if (!isDragging || !waveformBuffer) return;
+            e.preventDefault();
+            isDragging = false;
+            const canvasWidth = waveformCanvas.offsetWidth;
+            const totalDuration = waveformBuffer.duration;
+            const finalX = e.offsetX;
+            const margin = canvasWidth * 0.05;
+            const constrainedStartX = Math.max(margin, Math.min(canvasWidth - margin, Math.min(dragStartX, finalX)));
+            const constrainedEndX = Math.max(margin, Math.min(canvasWidth - margin, Math.max(dragStartX, finalX)));
+            const startX = constrainedStartX;
+            const endX = constrainedEndX;
+            const recordingToPlay = STATE.allRecordings.find(r => r.id === recording.id);
+            if (!recordingToPlay) return;
+            if (Math.abs(dragStartX - finalX) < APP_CONFIG.MIN_LOOP_DRAG_DISTANCE) {
+                const seekTime = (constrainedEndX / canvasWidth) * totalDuration;
+                setTimeout(() => {
+                    startPlayback(recording.id, recordingToPlay.isReversed, seekTime, 0, 0, recordingToPlay.speed);
+                }, 74);
+            } else {
+                const newLoopStart = (startX / canvasWidth) * totalDuration;
+                const newLoopEnd = (endX / canvasWidth) * totalDuration;
+                setTimeout(() => {
+                    startPlayback(recording.id, recordingToPlay.isReversed, newLoopStart, newLoopStart, newLoopEnd, recordingToPlay.speed);
+                }, 48);
+            }
+            drawWaveform(waveformBuffer, waveformCanvas);
+        });
+        waveformCanvas.addEventListener('pointerleave', (e) => {
+            if (!isDragging || !waveformBuffer) return;
+            e.preventDefault();
+            isDragging = false;
+            const canvasWidth = waveformCanvas.offsetWidth;
+            const totalDuration = waveformBuffer.duration;
+            const margin = canvasWidth * 0.05;
+            const finalX = e.offsetX < 0 ? margin : (e.offsetX > canvasWidth ? canvasWidth - margin :
+                Math.max(margin, Math.min(canvasWidth - margin, e.offsetX)));
+            const constrainedStartX = Math.max(margin, Math.min(canvasWidth - margin, Math.min(dragStartX, finalX)));
+            const constrainedEndX = Math.max(margin, Math.min(canvasWidth - margin, Math.max(dragStartX, finalX)));
+            const startX = constrainedStartX;
+            const endX = constrainedEndX;
+            const recordingToPlay = STATE.allRecordings.find(r => r.id === recording.id);
+            if (!recordingToPlay) return;
+            if (Math.abs(dragStartX - finalX) < APP_CONFIG.MIN_LOOP_DRAG_DISTANCE) {
+                const seekTime = (constrainedEndX / canvasWidth) * totalDuration;
+                setTimeout(() => {
+                    startPlayback(recording.id, recordingToPlay.isReversed, seekTime, 0, 0, recordingToPlay.speed);
+                }, 74);
+            } else {
+                const newLoopStart = (startX / canvasWidth) * totalDuration;
+                const newLoopEnd = (endX / canvasWidth) * totalDuration;
+                setTimeout(() => {
+                    startPlayback(recording.id, recordingToPlay.isReversed, newLoopStart, newLoopStart, newLoopEnd, recordingToPlay.speed);
+                }, 48);
+            }
+            drawWaveform(waveformBuffer, waveformCanvas);
+        });
+        playBtn.addEventListener('click', () => {
+            debounce('togglePlayPause', 'playback', async () => {
+                togglePlayPause(recording.id);
+            });
+        });
+        reverseBtn.addEventListener('click', () => {
+            debounce('toggleReverse', 'playback', async () => {
+                await toggleReverse(recording.id);
+            });
+        });
+        deleteBtn.addEventListener('click', () => {
+            if (confirm('Are you sure you want to delete this recording?')) {
+                deleteRecording(recording.id);
+            }
+        });
+        exportBtn.addEventListener('click', () => {
+            debounce('exportRecording', 'export', async () => {
+                await exportRecording(recording.id);
+            });
+        });
+        speedUpBtn.addEventListener('click', () => {
+            const currentSpeedIndex = APP_CONFIG.SPEED_LEVELS.indexOf(recording.speed);
+            if (currentSpeedIndex < APP_CONFIG.SPEED_LEVELS.length - 1) {
+                const newSpeedIndex = currentSpeedIndex + 1;
+                updatePlaybackSpeed(recording.id, newSpeedIndex);
+            }
+        });
+        speedDownBtn.addEventListener('click', () => {
+            const currentSpeedIndex = APP_CONFIG.SPEED_LEVELS.indexOf(recording.speed);
+            if (currentSpeedIndex > 0) {
+                const newSpeedIndex = currentSpeedIndex - 1;
+                updatePlaybackSpeed(recording.id, newSpeedIndex);
+            }
+        });
+        return card;
     }
 
     async function loadRecordings() {
         try {
-            let recordings = await getRecordingsFromDB();
-            
-            recordings.sort((a, b) => {
-                return STATE.sortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt;
+            const recordings = await getRecordingsFromDB();
+            STATE.allRecordings = recordings.sort((a, b) => (STATE.sortOrder === 'oldest' ? a.createdAt - b.createdAt : b.createdAt - a.createdAt));
+            ELEMENTS.recordingsGrid.innerHTML = '';
+            STATE.allRecordings.forEach(recording => {
+                const card = createRecordingCard(recording);
+                ELEMENTS.recordingsGrid.appendChild(card);
             });
-
-            STATE.allRecordings = recordings;
-            renderRecordingsDOM();
-            
-            // Auto minimize screen real estate profile if loaded repository contains multiple assets
-            if (recordings.length > 0 && !STATE.isRecording) {
-                collapseRecorderPanel(true);
-            } else if (recordings.length === 0) {
-                collapseRecorderPanel(false);
-            }
-        } catch (err) {
-            handleError(err, 'Repository loading mapping execution');
+            updateStorageStatus();
+            ELEMENTS.statusMessage.textContent = `${recordings.length} recordings loaded.`;
+        } catch (error) {
+            handleError(error, 'Failed to load recordings');
+            ELEMENTS.statusMessage.textContent = 'Failed to load recordings.';
         }
     }
 
-    function renderRecordingsDOM() {
-        const grid = ELEMENTS.recordingsGrid;
-        const template = ELEMENTS.recordingTemplate;
-        
-        // Clear grid contents safely
-        const emptyState = grid.querySelector('.empty-recordings-state');
-        grid.innerHTML = '';
-        if (emptyState) grid.appendChild(emptyState);
+    async function deleteRecording(recordingId) {
+        try {
+            if (STATE.currentPlayback.id === recordingId) {
+                stopPlayback();
+                resetPlaybackState();
+            }
+            await deleteRecordingFromDB(recordingId);
+            STATE.allRecordings = STATE.allRecordings.filter(r => r.id !== recordingId);
+            const card = document.querySelector(`.recording-card[data-id="${recordingId}"]`);
+            if (card) card.remove();
+            updateStorageStatus();
+            ELEMENTS.statusMessage.textContent = 'Recording deleted.';
+        } catch (error) {
+            handleError(error, 'Failed to delete recording');
+        }
+    }
 
-        if (STATE.allRecordings.length === 0) {
-            if (emptyState) emptyState.style.display = 'block';
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    function buildAudioBufferFromSerialized(serialized) {
+        if (!STATE.audioContext) throw new Error('AudioContext not initialized.');
+        if (!serialized) throw new Error('No serialized audio passed.');
+        const sampleRate = STATE.audioContext.sampleRate;
+        if (Array.isArray(serialized[0])) {
+            const numChannels = serialized.length;
+            const length = serialized[0].length;
+            const audioBuffer = STATE.audioContext.createBuffer(numChannels, length, sampleRate);
+            for (let ch = 0; ch < numChannels; ch++) {
+                audioBuffer.getChannelData(ch).set(new Float32Array(serialized[ch]));
+            }
+            return audioBuffer;
+        }
+        const length = serialized.length;
+        const audioBuffer = STATE.audioContext.createBuffer(1, length, sampleRate);
+        audioBuffer.getChannelData(0).set(new Float32Array(serialized));
+        return audioBuffer;
+    }
+
+    function extractAudioSegment(buffer, startSec, endSec) {
+        if (!buffer) throw new Error('extractAudioSegment: buffer required.');
+        const sr = buffer.sampleRate;
+        const startFrame = Math.max(0, Math.floor(startSec * sr));
+        const endFrame = Math.min(buffer.length, Math.floor(endSec * sr));
+        const newLength = Math.max(0, endFrame - startFrame);
+        const out = STATE.audioContext.createBuffer(buffer.numberOfChannels, newLength, sr);
+        for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+            const src = buffer.getChannelData(ch).subarray(startFrame, endFrame);
+            out.getChannelData(ch).set(src);
+        }
+        return out;
+    }
+
+    async function resampleWithOffline(sourceBuffer, speed = 1) {
+        if (!STATE.audioContext) throw new Error('AudioContext not initialized.');
+        if (!sourceBuffer) throw new Error('resampleWithOffline: sourceBuffer required.');
+        if (Math.abs(speed - 1) < 1e-9) return sourceBuffer;
+        const numChannels = sourceBuffer.numberOfChannels;
+        const sampleRate = sourceBuffer.sampleRate;
+        const targetDuration = sourceBuffer.duration / speed;
+        const targetLength = Math.max(1, Math.ceil(targetDuration * sampleRate));
+        const offline = new OfflineAudioContext(numChannels, targetLength, sampleRate);
+        const src = offline.createBufferSource();
+        src.buffer = sourceBuffer;
+        src.playbackRate.value = speed;
+        src.connect(offline.destination);
+        src.start(0);
+        const rendered = await offline.startRendering();
+        return rendered;
+    }
+
+    async function getProcessedAudioBuffer(recording) {
+        if (!recording) throw new Error('recording required.');
+        const serialized = recording.isReversed ? recording.reversed : recording.original;
+        let buffer = buildAudioBufferFromSerialized(serialized);
+        if (STATE.currentPlayback.id === recording.id && STATE.currentPlayback.loopEnd > STATE.currentPlayback.loopStart) {
+            buffer = extractAudioSegment(buffer, STATE.currentPlayback.loopStart, STATE.currentPlayback.loopEnd);
+        }
+        const speed = typeof recording.speed === 'number' ? recording.speed : 1;
+        if (Math.abs(speed - 1) > 1e-9) {
+            buffer = await resampleWithOffline(buffer, speed);
+        }
+        return buffer;
+    }
+
+    async function exportRecording(recordingId) {
+        try {
+            ELEMENTS.statusMessage.textContent = 'Preparing export...';
+            const recording = STATE.allRecordings.find(r => r.id === recordingId);
+            if (!recording) throw new Error('Recording not found.');
+            const variants = [];
+            if (STATE.settings.exportOriginalAndReversed) {
+                variants.push({ label: 'original', isReversed: false });
+                variants.push({ label: 'reversed', isReversed: true });
+            } else {
+                variants.push({ label: recording.isReversed ? 'reversed' : 'original', isReversed: !!recording.isReversed });
+            }
+            for (const v of variants) {
+                const recVariant = { ...recording, isReversed: v.isReversed };
+                ELEMENTS.statusMessage.textContent = `Rendering ${v.label}...`;
+                const processedBuffer = await getProcessedAudioBuffer(recVariant);
+                ELEMENTS.statusMessage.textContent = `Encoding ${v.label} to WAV...`;
+                const wavBlob = convertAudioBufferToWavBlob(processedBuffer);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const baseName = `recording_${recording.id}_${v.label}_${timestamp}.wav`;
+                downloadBlob(wavBlob, baseName);
+                await new Promise(r => setTimeout(r, 120));
+            }
+            if (STATE.settings.exportWithInfoFile) {
+                const metadata = {
+                    id: recording.id,
+                    createdAt: recording.createdAt,
+                    durationMs: recording.duration,
+                    exportedAt: Date.now(),
+                    exportedVariants: variants.map(v => v.label),
+                    channels: (() => {
+                        const s = recording.original;
+                        if (Array.isArray(s[0])) return s.length;
+                        return 1;
+                    })(),
+                    sampleRate: STATE.audioContext ? STATE.audioContext.sampleRate : null,
+                    speed: recording.speed,
+                    isReversed: recording.isReversed
+                };
+                const jsonBlob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
+                downloadBlob(jsonBlob, `recording_${recording.id}_info.json`);
+            }
+            ELEMENTS.statusMessage.textContent = 'Export complete.';
+        } catch (error) {
+            handleError(error, 'Export failed');
+        } finally {
+            STATE.activeOperations.export = false;
+        }
+    }
+
+    async function exportAllRecordings() {
+        try {
+            ELEMENTS.statusMessage.textContent = 'Starting mass export...';
+            for (const recording of STATE.allRecordings) {
+                const processedBuffer = buildAudioBufferFromSerialized(recording.original);
+                const wavBlob = convertAudioBufferToWavBlob(processedBuffer);
+                const timestamp = new Date(recording.createdAt).toISOString().replace(/[:.]/g, '-');
+                const filename = `recording_${recording.id}_original_${timestamp}.wav`;
+                downloadBlob(wavBlob, filename);
+                await new Promise(r => setTimeout(r, 100));
+            }
+            ELEMENTS.statusMessage.textContent = `Exported ${STATE.allRecordings.length} recordings.`;
+        } catch (error) {
+            handleError(error, 'Mass export failed');
+        } finally {
+            STATE.activeOperations.export = false;
+        }
+    }
+
+
+    function convertAudioBufferToWavBlob(buffer) {
+        if (!buffer) throw new Error('convertAudioBufferToWavBlob: AudioBuffer required.');
+        const numChannels = buffer.numberOfChannels;
+        const sampleRate = buffer.sampleRate;
+        const bitsPerSample = 32;
+        const bytesPerSample = bitsPerSample / 8;
+        const blockAlign = numChannels * bytesPerSample;
+        const dataByteLength = buffer.length * blockAlign;
+        const headerByteLength = 44;
+        const totalLength = headerByteLength + dataByteLength;
+        const arrayBuffer = new ArrayBuffer(totalLength);
+        const view = new DataView(arrayBuffer);
+        function writeString(view, offset, string) {
+            for (let i = 0; i < string.length; i++) view.setUint8(offset + i, string.charCodeAt(i));
+        }
+        writeString(view, 0, 'RIFF');
+        view.setUint32(4, 36 + dataByteLength, true);
+        writeString(view, 8, 'WAVE');
+        writeString(view, 12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 3, true);
+        view.setUint16(22, numChannels, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * blockAlign, true);
+        view.setUint16(32, blockAlign, true);
+        view.setUint16(34, bitsPerSample, true);
+        writeString(view, 36, 'data');
+        view.setUint32(40, dataByteLength, true);
+        let offset = 44;
+        const channels = new Array(numChannels);
+        for (let ch = 0; ch < numChannels; ch++) channels[ch] = buffer.getChannelData(ch);
+        for (let i = 0; i < buffer.length; i++) {
+            for (let ch = 0; ch < numChannels; ch++) {
+                view.setFloat32(offset, channels[ch][i], true);
+                offset += 4;
+            }
+        }
+        return new Blob([view], { type: 'audio/wav' });
+    }
+
+    async function startRecording() {
+        if (STATE.isRecording) return;
+        if (STATE.allRecordings.length >= APP_CONFIG.MAX_RECORDINGS - 1) {
+            showModal('Recording Limit Reached', 'You have reached the maximum number of recordings. Please delete some old recordings to free up space.');
             return;
         }
-        if (emptyState) emptyState.style.display = 'none';
-
-        STATE.allRecordings.forEach(rec => {
-            const clone = template.content.cloneNode(true);
-            const card = clone.querySelector('.recording-card');
-            card.setAttribute('data-id', rec.id);
-            
-            card.querySelector('.card-title').textContent = rec.title;
-            card.querySelector('.card-time').textContent = formatDuration(rec.duration);
-
-            // Bind contextual sub-buttons event operations
-            const playBtn = card.querySelector('.play-btn');
-            playBtn.addEventListener('click', () => {
-                if (STATE.currentPlayback.id === rec.id && !STATE.currentPlayback.isPaused) {
-                    stopPlayback();
-                    ELEMENTS.statusMessage.textContent = I18N.get('status_paused');
+        ELEMENTS.statusMessage.textContent = 'Starting to record...';
+        try {
+            STATE.isRecording = true;
+            STATE.recordingChunks = [];
+            STATE.mediaStream = await captureTabAudio();
+            STATE.mediaRecorder = new MediaRecorder(STATE.mediaStream);
+            STATE.mediaRecorder.ondataavailable = (event) => {
+                STATE.recordingChunks.push(event.data);
+            };
+            STATE.mediaRecorder.onstop = async () => {
+                if (STATE.recordingChunks.length > 0) {
+                    ELEMENTS.statusMessage.textContent = 'Saving recording...';
+                    const audioBlob = new Blob(STATE.recordingChunks, { type: 'audio/webm; codecs=opus' });
+                    const processedAudio = await processAudioBuffer(audioBlob);
+                    const newRecording = {
+                        id: 'rec-' + Date.now(),
+                        createdAt: Date.now(),
+                        duration: processedAudio.duration,
+                        original: processedAudio.original,
+                        reversed: processedAudio.reversed,
+                        isReversed: false,
+                        speed: 1
+                    };
+                    await saveRecording(newRecording);
+                    STATE.allRecordings.unshift(newRecording);
+                    const newCard = createRecordingCard(newRecording);
+                    ELEMENTS.recordingsGrid.prepend(newCard);
+                    updateStorageStatus();
+                    ELEMENTS.statusMessage.textContent = 'Recording saved.';
                 } else {
-                    const startPos = STATE.currentPlayback.id === rec.id ? STATE.currentPlayback.pauseTime : 0;
-                    startPlayback(rec.id, startPos);
+                    ELEMENTS.statusMessage.textContent = 'Recording aborted. No data.';
                 }
-            });
-
-            const revBtn = card.querySelector('.reverse-btn');
-            revBtn.addEventListener('click', () => {
-                const cp = STATE.currentPlayback;
-                if (cp.id === rec.id) {
-                    cp.isReversed = !cp.isReversed;
-                    revBtn.classList.toggle('active-accent', cp.isReversed);
-                    if (!cp.isPaused) {
-                        startPlayback(rec.id, cp.pauseTime);
-                    } else {
-                        updateCardWaveformDisplay(rec.id);
-                    }
-                } else {
-                    cp.isReversed = !cp.isReversed;
-                    revBtn.classList.toggle('active-accent', cp.isReversed);
-                }
-            });
-
-            // Initialize playback cache
-            if (!STATE.cachedPeaks[rec.id]) {
-                const tempBuffer = buildAudioBufferFromSerialized(rec.audioData.original, false);
-                ProWaveformEngine.generateCache(rec.id, tempBuffer, 64);
-            }
-
-            const speedDisplay = card.querySelector('.speed-display');
-            card.querySelector('.speedUp').addEventListener('click', () => {
-                adjustSpeed(rec.id, 1, speedDisplay);
-            });
-            card.querySelector('.speedDown').addEventListener('click', () => {
-                adjustSpeed(rec.id, -1, speedDisplay);
-            });
-
-            card.querySelector('.delete-btn').addEventListener('click', async () => {
-                if (STATE.currentPlayback.id === rec.id) stopPlayback();
-                await deleteRecordingFromDB(rec.id);
-                await loadRecordings();
-                updateStorageStatus();
-                ELEMENTS.statusMessage.textContent = I18N.get('status_track_removed');
-            });
-
-            grid.appendChild(clone);
-            updateCardWaveformDisplay(rec.id);
-        });
-    }
-
-    function adjustSpeed(recordingId, direction, displayElement) {
-        const cp = STATE.currentPlayback;
-        let currentIdx = APP_CONFIG.SPEED_LEVELS.indexOf(cp.playbackRate);
-        if (currentIdx === -1) currentIdx = 4; // default index for 1x
-
-        let nextIdx = currentIdx + direction;
-        if (nextIdx >= 0 && nextIdx < APP_CONFIG.SPEED_LEVELS.length) {
-            const newRate = APP_CONFIG.SPEED_LEVELS[nextIdx];
-            cp.playbackRate = newRate;
-            if (displayElement) displayElement.textContent = `${newRate.toFixed(2)}x`;
-            
-            if (cp.id === recordingId && !cp.isPaused) {
-                startPlayback(recordingId, cp.pauseTime);
-            }
+                resetRecordingState();
+            };
+            STATE.mediaRecorder.start();
+            setupVisualizer(STATE.mediaStream);
+            const labelSpan = ELEMENTS.recordBtn.querySelector('span');
+            labelSpan.textContent = 'Stop Recording';
+            ELEMENTS.recordBtn.classList.add('recording');
+            ELEMENTS.statusMessage.textContent = 'Recording...';
+        } catch (error) {
+            handleError(error, 'Recording failed');
+            resetRecordingState();
         }
     }
 
-    function collapseRecorderPanel(shouldCollapse) {
-        if (shouldCollapse) {
-            ELEMENTS.recorderPanel.classList.add('collapsed');
-            const toggleIcon = ELEMENTS.togglePanelBtn.querySelector('i');
-            if (toggleIcon) toggleIcon.className = 'fas fa-chevron-down';
-        } else {
-            ELEMENTS.recorderPanel.classList.remove('collapsed');
-            const toggleIcon = ELEMENTS.togglePanelBtn.querySelector('i');
-            if (toggleIcon) toggleIcon.className = 'fas fa-chevron-up';
+    function stopRecording() {
+        if (!STATE.isRecording) return;
+        STATE.isRecording = false;
+        if (STATE.mediaRecorder && STATE.mediaRecorder.state !== 'inactive') {
+            STATE.mediaRecorder.stop();
         }
     }
 
-    function updateStorageStatus() {
-        let totalAllocatedBytes = 0;
-        STATE.allRecordings.forEach(rec => {
-            if (rec.audioData && rec.audioData.original) {
-                rec.audioData.original.forEach(chan => {
-                    totalAllocatedBytes += chan.length * 4; // Float32 sizing matrix multiplier
-                });
+    function resetRecordingState() {
+        STATE.isRecording = false;
+        if (STATE.mediaStream) {
+            STATE.mediaStream.getTracks().forEach(track => track.stop());
+            STATE.mediaStream = null;
+        }
+        STATE.recordingChunks = [];
+        if (STATE.audioElement) {
+            STATE.audioElement.srcObject = null;
+            STATE.audioElement = null;
+        }
+        setupVisualizer(null);
+        ELEMENTS.recordBtn.querySelector('span').textContent = 'Start Recording';
+        ELEMENTS.recordBtn.classList.remove('recording');
+    }
+
+    function setupVisualizer(stream) {
+        if (!stream) {
+            if (STATE.visualizerAnimationFrameId) {
+                cancelAnimationFrame(STATE.visualizerAnimationFrameId);
+                STATE.visualizerAnimationFrameId = null;
             }
-        });
-
-        const megabytesAllocated = totalAllocatedBytes / (1024 * 1024);
-        const ceilingLimit = APP_CONFIG.TOTAL_STORAGE_LIMIT / (1024 * 1024);
-        ELEMENTS.storageStatus.textContent = `${megabytesAllocated.toFixed(1)} MB of ${ceilingLimit} MB`;
-        
-        const infoBar = document.getElementById('storageInfo');
-        if (megabytesAllocated > ceilingLimit * 0.85) {
-            infoBar.style.color = 'var(--danger)';
-        } else if (megabytesAllocated > ceilingLimit * 0.6) {
-            infoBar.style.color = 'var(--warning)';
-        } else {
-            infoBar.style.color = '';
+            if (STATE.mediaStreamSource) {
+                STATE.mediaStreamSource.disconnect();
+                STATE.mediaStreamSource = null;
+            }
+            if (STATE.analyserNode) {
+                STATE.analyserNode.disconnect();
+                STATE.analyserNode = null;
+            }
+            const ctx = ELEMENTS.visualizer.getContext('2d');
+            ctx.clearRect(0, 0, ELEMENTS.visualizer.width, ELEMENTS.visualizer.height);
+            return;
         }
-    }
-
-    /**
-     * Settings Engine Persistence Actions
-     */
-    async function saveExtensionSettings() {
-        const payload = {
-            lang: ELEMENTS.langSelect.value,
-            temp1: document.getElementById('tempSetting1').checked,
-            temp2: document.getElementById('tempSetting2').checked
+        if (!STATE.audioContext) {
+            try {
+                STATE.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                handleError(e, 'AudioContext setup');
+                return;
+            }
+        }
+        STATE.mediaStreamSource = STATE.audioContext.createMediaStreamSource(stream);
+        STATE.analyserNode = STATE.audioContext.createAnalyser();
+        STATE.analyserNode.fftSize = 256;
+        STATE.mediaStreamSource.connect(STATE.analyserNode);
+        const dataArray = new Uint8Array(STATE.analyserNode.frequencyBinCount);
+        const draw = () => {
+            STATE.analyserNode.getByteFrequencyData(dataArray);
+            const ctx = ELEMENTS.visualizer.getContext('2d');
+            const width = ELEMENTS.visualizer.width;
+            const height = ELEMENTS.visualizer.height;
+            const barWidth = (width / dataArray.length) * 2.5;
+            let x = 0;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#fff';
+            for (let i = 0; i < dataArray.length; i++) {
+                const barHeight = dataArray[i] / 2;
+                ctx.fillRect(x, height - barHeight, barWidth, barHeight);
+                x += barWidth + 1;
+            }
+            STATE.visualizerAnimationFrameId = requestAnimationFrame(draw);
         };
-        
-        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            chrome.storage.local.set({ appSettings: payload });
+        draw();
+    }
+
+    function initTheme() {
+        if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+            document.documentElement.classList.remove('theme-light');
         } else {
-            localStorage.setItem('reverse_app_settings', JSON.stringify(payload));
-        }
-        
-        // Trigger multi-language swap routines dynamically
-        if (payload.lang !== STATE.currentLanguage) {
-            STATE.currentLanguage = payload.lang;
-            // Dynamic localization translation trigger context
-            ELEMENTS.statusMessage.textContent = I18N.get('status_ready');
+            document.documentElement.classList.add('theme-light');
         }
     }
 
-    async function loadExtensionSettings() {
-        let settings = null;
-        if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-            const data = await new Promise(r => chrome.storage.local.get(['appSettings'], r));
-            settings = data?.appSettings;
-        } else {
-            const localRaw = localStorage.getItem('reverse_app_settings');
-            if (localRaw) settings = JSON.parse(localRaw);
+    async function initSettings() {}
+
+    async function updateStorageStatus() {
+        if (!navigator.storage || !navigator.storage.estimate) {
+            ELEMENTS.storageStatus.style.display = 'none';
+            return;
         }
-
-        if (settings) {
-            if (settings.lang) ELEMENTS.langSelect.value = settings.lang;
-            STATE.currentLanguage = settings.lang || 'en';
-            document.getElementById('tempSetting1').checked = !!settings.temp1;
-            document.getElementById('tempSetting2').checked = !!settings.temp2;
+        try {
+            const numRecordings = STATE.allRecordings.length;
+            const isYellowWarning = numRecordings >= APP_CONFIG.RECORDING_WARNING_THRESHOLD_YELLOW;
+            const isRedWarning = numRecordings >= APP_CONFIG.RECORDING_WARNING_THRESHOLD_RED;
+            ELEMENTS.storageStatus.textContent = `Used: ${numRecordings}/${APP_CONFIG.MAX_RECORDINGS} recordings`;
+            ELEMENTS.storageStatus.classList.toggle('warning-yellow', isYellowWarning && !isRedWarning);
+            ELEMENTS.storageStatus.classList.toggle('warning-red', isRedWarning);
+            ELEMENTS.storageStatus.style.display = 'block';
+        } catch (e) {
+            handleError(e, 'Storage status update');
         }
     }
 
-    function showModalNotification(title, message) {
-        ELEMENTS.infoModalTitle.textContent = title;
-        ELEMENTS.infoModalMessage.textContent = message;
-        ELEMENTS.infoModal.classList.add('active-flex');
+    async function checkAndShowWarningModal() {
+        if (!navigator.storage || !navigator.storage.estimate) return;
+        try {
+            const estimate = await navigator.storage.estimate();
+            const usage = estimate.usage;
+            if (usage >= APP_CONFIG.STORAGE_WARNING_THRESHOLD) {
+                const usageMB = (usage / (1024 * 1024)).toFixed(2);
+                const quotaMB = (estimate.quota / (1024 * 1024)).toFixed(2);
+                const message = `You're running low on storage space. Used: ${usageMB} MB / ${quotaMB} MB. Please consider deleting some recordings.`;
+                showModal('Low Storage Warning', message);
+            }
+        } catch (e) {
+            console.error('Failed to check storage for warning modal:', e);
+        }
     }
 
-    function hideModalNotification() {
-        ELEMENTS.infoModal.classList.remove('active-flex');
+    function showModal(title, message) {
+        const modalId = 'dynamicModal';
+        let modal = document.getElementById(modalId);
+        if (!modal) {
+            modal = document.createElement('div');
+            modal.id = modalId;
+            modal.classList.add('modal');
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <span class="close-btn">&times;</span>
+                    <h3 id="modal-title"></h3>
+                    <p id="modal-message"></p>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.querySelector('.close-btn').addEventListener('click', () => modal.style.display = 'none');
+            window.addEventListener('click', (event) => {
+                if (event.target === modal) modal.style.display = 'none';
+            });
+        }
+        modal.querySelector('#modal-title').textContent = title;
+        modal.querySelector('#modal-message').textContent = message;
+        modal.style.display = 'block';
     }
+
 
     function setupEventListeners() {
         ELEMENTS.recordBtn.addEventListener('click', () => {
-            debounce(null, 'record', async () => {
-                await toggleRecording();
-            });
-        });
-
-        ELEMENTS.togglePanelBtn.addEventListener('click', () => {
-            const isCurrentlyCollapsed = ELEMENTS.recorderPanel.classList.contains('collapsed');
-            collapseRecorderPanel(!isCurrentlyCollapsed);
-        });
-
-        // Beautiful glass settings trigger configurations 
-        ELEMENTS.settingsModalBtn.addEventListener('click', () => {
-            ELEMENTS.settingsModal.classList.add('active-flex');
-        });
-
-        ELEMENTS.closeSettingsBtn.addEventListener('click', () => {
-            ELEMENTS.settingsModal.classList.remove('active-flex');
-        });
-
-        // Settings option change hooks
-        ELEMENTS.langSelect.addEventListener('change', saveExtensionSettings);
-        document.getElementById('tempSetting1').addEventListener('change', saveExtensionSettings);
-        document.getElementById('tempSetting2').addEventListener('change', saveExtensionSettings);
-
-        // Emergency Clear Action
-        ELEMENTS.clearAllRecordingsBtn.addEventListener('click', async () => {
-            if (confirm("Are you sure you want to clear all recordings from localized index storage stores?")) {
-                stopPlayback();
-                await clearAllRecordingsFromDB();
-                await loadRecordings();
-                updateStorageStatus();
-                ELEMENTS.settingsModal.classList.remove('active-flex');
-                ELEMENTS.statusMessage.textContent = I18N.get('status_ready');
-            }
-        });
-
-        // Info Notification Modal handling hooks
-        ELEMENTS.infoModalOkBtn.addEventListener('click', hideModalNotification);
-        const innerClose = ELEMENTS.infoModal.querySelector('.info-close');
-        if (innerClose) innerClose.addEventListener('click', hideModalNotification);
-
-        // Backdrop dismissal alignment checks
-        window.addEventListener('click', (e) => {
-            if (e.target === ELEMENTS.settingsModal) ELEMENTS.settingsModal.classList.remove('active-flex');
-            if (e.target === ELEMENTS.infoModal) hideModalNotification();
-        });
-
-        ELEMENTS.themeToggle.addEventListener('click', () => {
-            const doc = document.documentElement;
-            if (doc.classList.contains('theme-light')) {
-                doc.classList.remove('theme-light');
-                doc.classList.add('theme-dark');
-                ELEMENTS.themeToggle.querySelector('i').className = 'fas fa-sun';
+            if (STATE.isRecording) {
+                stopRecording();
             } else {
-                doc.classList.remove('theme-dark');
-                doc.classList.add('theme-light');
-                ELEMENTS.themeToggle.querySelector('i').className = 'fas fa-moon';
+                debounce('startRecording', 'record', async () => {
+                    await startRecording();
+                });
             }
         });
-
+        ELEMENTS.themeToggle.addEventListener('click', () => {
+            document.documentElement.classList.toggle('theme-dark');
+            document.documentElement.classList.toggle('theme-light');
+        });
         ELEMENTS.sortSelect.addEventListener('change', (e) => {
             STATE.sortOrder = e.target.value;
             loadRecordings();
         });
-    }
+        const settingsModalBtn = document.getElementById('settingsModalBtn');
+        const settingsModal = document.getElementById('settingsModal');
+        const closeSettingsBtn = document.querySelector('#settingsModal .close-btn');
 
-    function initTheme() {
-        // Ensure default dark variant mapping exists on load logic setup
-        if (!document.documentElement.classList.contains('theme-light') && !document.documentElement.classList.contains('theme-dark')) {
-            document.documentElement.classList.add('theme-dark');
-        }
-    }
+        closeSettingsBtn.addEventListener('click', () => {
+            settingsModal.style.display = 'none';
+        });
 
-    function checkAndShowWarningModal() {
-        const ceilingLimit = APP_CONFIG.MAX_RECORDINGS;
-        if (STATE.allRecordings.length >= ceilingLimit * 0.9) {
-            showModalNotification(I18N.get('warning_title') || "Storage Warning", I18N.get('msg_purge_older') || "Please purge older tracks to keep optimal memory parameters.");
-        }
     }
 
     function formatDuration(ms) {
@@ -1145,12 +1274,10 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleError(error, context) {
-        console.error(`Error detected during channel loop [${context}]:`, error);
-        if (ELEMENTS.statusMessage) {
-            ELEMENTS.statusMessage.textContent = `Error: ${error.message || error}`;
-        }
+        console.error(`Error in ${context}:`, error);
+        ELEMENTS.statusMessage.textContent = `Error: ${error.message}`;
+        updateAllPlaybackCardUIs();
     }
 
-    // Fire application structural load sequences
     initExtension();
 });
