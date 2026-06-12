@@ -65,7 +65,7 @@ body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   width: 590px;
-  height: 640px; /* Slight bump for UI breathing room */
+  height: 640px;
   overflow: hidden;
   transition: background-color var(--transition-speed);
   backdrop-filter: var(--backdrop-blur);
@@ -78,13 +78,12 @@ body {
   position: relative;
 }
 
-/* Header */
 .app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background-color: rgba(22, 22, 26, 0.85); /* Glassmorphism */
+  background-color: rgba(22, 22, 26, 0.85);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   transition: background-color var(--transition-speed);
   backdrop-filter: var(--backdrop-blur);
@@ -117,7 +116,6 @@ body {
   gap: 10px;
 }
 
-/* Main */
 .app-main {
   flex: 1;
   padding: 16px;
@@ -127,7 +125,6 @@ body {
   overflow: hidden;
 }
 
-/* Recorder Panel */
 .recorder-panel {
   background: var(--bg-secondary);
   border-radius: var(--border-radius);
@@ -178,7 +175,6 @@ body {
   opacity: 0.7;
 }
 
-/* Recording Indicator */
 .recording-indicator {
   position: absolute;
   top: 14px;
@@ -222,7 +218,6 @@ body {
   letter-spacing: 0.5px;
 }
 
-/* Buttons */
 .controls-row {
     display: flex;
     justify-content: center;
@@ -297,7 +292,6 @@ body {
   transform: translateY(1px) scale(0.95);
 }
 
-/* Recordings list */
 .recordings-container {
   flex: 1;
   overflow: hidden;
@@ -362,7 +356,6 @@ body {
   border-color: var(--accent-primary);
 }
 
-/* Grid + Card */
 .recordings-grid {
   flex: 1;
   display: grid;
@@ -446,7 +439,6 @@ body {
   border-radius: 12px;
 }
 
-/* Glassmorphic Cozy Analog Waveform Display Window */
 .waveform-container {
   position: relative;
   height: 80px;
@@ -485,7 +477,6 @@ body {
   border-right: 2px solid var(--accent-primary);
 }
 
-/* Updated Speed Slider Controls */
 .card-controls {
   display: flex;
   justify-content: space-between;
@@ -567,7 +558,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* Footer */
 .app-footer {
   display: flex;
   justify-content: space-between;
@@ -610,7 +600,6 @@ body {
   font-size: 14px;
 }
 
-/* Tooltip */
 .tooltip {
   position: absolute;
   bottom: 110%;
@@ -636,7 +625,7 @@ body {
   visibility: visible;
   transform: translateX(-50%) translateY(0);
 }
-/* Modal Base */
+
 .modal {
   position: fixed;
   z-index: 100;
@@ -708,7 +697,6 @@ body {
   cursor: pointer;
 }
 
-/* Modal Variants */
 .modal.info .modal-content {
   border-left: 6px solid var(--accent-primary);
 }
@@ -722,7 +710,6 @@ body {
   border-left: 6px solid var(--danger);
 }
 
-/* Settings rows */
 .settings-option {
   display: flex;
   justify-content: space-between;

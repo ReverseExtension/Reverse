@@ -1,11 +1,5 @@
-/**
- * @fileoverview Reverse Audio Application Core
- * Features ProWaveformEngine upgraded with multi-stage lighting layers,
- * sub-pixel anti-aliased liquid rendering, glass morphism shaders, and neon visual depth.
- */
-
 window.addEventListener('DOMContentLoaded', () => {
-    const APP_NAME = 'REVERSE';
+    const APP_NAME = 'RE-VERSE';
 
     const APP_CONFIG = {
         MAX_RECORDINGS: 20,
@@ -14,14 +8,14 @@ window.addEventListener('DOMContentLoaded', () => {
         RECORDING_WARNING_THRESHOLD_YELLOW: 10,
         RECORDING_WARNING_THRESHOLD_RED: 18,
         STORAGE_WARNING_THRESHOLD: 48 * 1024 * 1024,
-        SPEED_LEVELS: [.28, .48, .74, .88, 1, 1.4, 2.08, 3.3],
-        DB: { NAME: 'AudioReverserDB', VERSION: 3 },
+        SPEED_LEVELS: [.38, .48, .59, .74, .88, 1, 1.4, 2.08, 3.03],
+        DB: { NAME: 'AudioReverserDB', VERSION: 4 },
         MIN_LOOP_DRAG_DISTANCE: 4,
         DEBOUNCE_TIMES: { RECORD: 300, PLAYBACK: 150, EXPORT: 500 },
         ZOOM: {
-            MIN_WINDOW_DURATION: 0.05, // Crisp micro-zoom resolution down to 50ms
-            SENSITIVITY: 0.12,         // Luxurious acceleration curve
-            LERP_FACTOR: 0.22          // Highly fluid kinetic interpolation
+            MIN_WINDOW_DURATION: 0.05,
+            SENSITIVITY: 0.12,       
+            LERP_FACTOR: 0.22      
         }
     };
 
@@ -77,9 +71,6 @@ window.addEventListener('DOMContentLoaded', () => {
         audioElement: null
     };
 
-    /**
-     * Micro Localization Engine
-     */
     const I18N = {
         dict: {},
         async init() {
@@ -114,9 +105,6 @@ window.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    /**
-     * ProWaveformEngine - Advanced DSP Sub-pixel Vector Rendering Matrix
-     */
     const ProWaveformEngine = {
         generateCache(recordingId, buffer, blockSize = 32) {
             const numChannels = buffer.numberOfChannels;
