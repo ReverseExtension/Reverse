@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Reverse",
+  "version": "1",
+  "description": "Record and reverse audio from a tab.",
+  "permissions": ["tabCapture", "activeTab", "storage"],
+  "action": {
+    "default_popup": "reverse.html"
+  },
+  "host_permissions": ["<all_urls>"]
+}
